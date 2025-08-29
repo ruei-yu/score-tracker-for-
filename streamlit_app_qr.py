@@ -123,7 +123,28 @@ scoring_items = config.get(" scoring_items", [])
 rewards = config.get("rewards", [])
 points_map = {i["category"]: int(i["points"]) for i in scoring_items}
 
-tabs = st.tabs(["📥 管理與統計", "📱 產生報到 QR"])
+# 👉 這一段就是可以在 App 內編輯 scoring_items & rewards
+with st.sidebar.expander("➕ 編輯集點項目與點數", expanded=False):
+    st.caption("新增或調整右側表格後點『儲存設定』。")
+    items_df = pd.DataFrame(scoring_items) if scoring_items else pd.DataFrame(columns=["category", "points"])
+    edited = st.data_editor(items_df, num_rows="dynamic", use_container_width=True, key="items_editor")
+    if st.button("💾 儲存設定（集點項目）"):
+        config[" scoring_items"] = edited.dropna(subset=["category"]).to_dict(orient="records")
+        st.session_state.config = config
+        save_config(config, cfg_file)
+        st.success("已儲存集點項目。")
+
+with st.sidebar.expander("🎁 編輯獎勵門檻", expanded=False):
+    rew_df = pd.DataFrame(rewards) if rewards else pd.DataFrame(columns=["threshold", "reward"])
+    rew_edit = st.data_editor(rew_df, num_rows="dynamic", use_container_width=True, key="rewards_editor")
+    if st.button("💾 儲存設定（獎勵）"):
+        config["rewards"] = [
+            {"threshold": int(r["threshold"]), "reward": r["reward"]}
+            for r in rew_edit.dropna(subset=["threshold", "reward"]).to_dict(orient="records")
+        ]
+        st.session_state.config = config
+        save_config(config, cfg_file)
+        st.success("已儲存獎勵門檻。")
 
 # --- Tab 1 ---
 with tabs[0]:
