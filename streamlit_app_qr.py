@@ -1,0 +1,194 @@
+import streamlit as st
+import pandas as pd
+import json, io
+from datetime import date, datetime
+from urllib.parse import quote, unquote
+import qrcode
+
+st.set_page_config(page_title="集點計分器 + 報到QR", page_icon="🔢", layout="wide")
+
+# ---------- Helpers ----------
+def load_config(file):
+    try:
+        return json.load(open(file, "r", encoding="utf-8"))
+    except Exception:
+        return {" scoring_items": [], "rewards": []}
+
+def save_config(cfg, file):
+    with open(file, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+def normalize_names(s: str):
+    if not s:
+        return []
+    raw = (s.replace("、", ",").replace("，", ",").replace("（", "(").replace("）", ")").replace(" ", ","))
+    out = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "(" in token and ")" in token:
+            token = token.split("(")[0].strip()
+        out.append(token)
+    return [n for n in out if n]
+
+def aggregate(df, points_map, rewards):
+    if df.empty:
+        return pd.DataFrame(columns=["participant", "總點數"])
+    df = df.copy()
+    df["points"] = df["category"].map(points_map).fillna(0).astype(int)
+    summary = df.pivot_table(index="participant", columns="category",
+                             values="points", aggfunc="count", fill_value=0).sort_index()
+    summary["總點數"] = 0
+    for cat, pt in points_map.items():
+        if cat in summary.columns:
+            summary["總點數"] += summary[cat] * pt
+    thresholds = sorted([r["threshold"] for r in rewards])
+    def reward_badge(x):
+        gain = [t for t in thresholds if x >= t]
+        return (max(gain) if gain else 0)
+    summary["已達門檻"] = summary["總點數"].apply(reward_badge)
+    summary = summary.reset_index().sort_values(["總點數", "participant"], ascending=[False, True])
+    return summary
+
+def save_events(df, path):
+    df.to_csv(path, index=False, encoding="utf-8-sig")
+
+def load_events(path):
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame(columns=["date","title","category","participant"])
+
+# ---------- Query Param: Public check-in mode ----------
+qp = st.experimental_get_query_params()
+mode = qp.get("mode", [""])[0]
+event_param = qp.get("event", [""])[0]
+
+if mode == "checkin":
+    st.markdown("### ✅ 線上報到")
+    data_file = st.text_input("資料儲存CSV路徑", value="events.csv")
+    events_df = load_events(data_file)
+
+    # event info from URL
+    title, category, target_date = "未命名活動", "活動護持（含宿訪）", date.today().isoformat()
+    try:
+        decoded = unquote(event_param)
+        if decoded.strip().startswith("{"):
+            o = json.loads(decoded)
+            title = o.get("title", title)
+            category = o.get("category", category)
+            target_date = o.get("date", target_date)
+        else:
+            title = decoded or title
+    except Exception:
+        pass
+
+    st.info(f"活動：**{title}**｜類別：**{category}**｜日期：{target_date}")
+    name = st.text_input("請輸入姓名（可含括號註記）")
+    if st.button("送出報到"):
+        clean = normalize_names(name)
+        if not clean:
+            st.error("請輸入姓名。")
+        else:
+            exists = ((events_df["date"] == target_date) &
+                      (events_df["title"] == title) &
+                      (events_df["category"] == category) &
+                      (events_df["participant"] == clean[0])).any()
+            if exists:
+                st.warning(f"⚠️ {clean[0]} 已經報到過了，無法重複。")
+            else:
+                new = pd.DataFrame([{
+                    "date": target_date, "title": title,
+                    "category": category, "participant": clean[0]}])
+                events_df = pd.concat([events_df, new], ignore_index=True)
+                save_events(events_df, data_file)
+                st.success(f"已報到：{clean[0]}")
+    st.stop()
+
+# ---------- Admin / Normal UI ----------
+st.title("🔢 集點計分器 + 報到QR")
+
+st.sidebar.title("⚙️ 設定")
+cfg_file = st.sidebar.text_input("設定檔路徑", value="points_config.json")
+data_file = st.sidebar.text_input("資料儲存CSV路徑", value="events.csv")
+
+if "config" not in st.session_state:
+    st.session_state.config = load_config(cfg_file)
+if "events" not in st.session_state:
+    st.session_state.events = load_events(data_file)
+
+config = st.session_state.config
+scoring_items = config.get(" scoring_items", [])
+rewards = config.get("rewards", [])
+points_map = {i["category"]: int(i["points"]) for i in scoring_items}
+
+tabs = st.tabs(["📥 管理與統計", "📱 產生報到 QR"])
+
+# --- Tab 1 ---
+with tabs[0]:
+    left, right = st.columns([2, 1])
+    with left:
+        st.subheader("📥 匯入或建立出席資料")
+        uploaded = st.file_uploader("上傳 CSV", type=["csv"])
+        if uploaded:
+            df = pd.read_csv(uploaded)
+            st.session_state.events = df
+            save_events(df, data_file)
+            st.success(f"已載入 {len(df)} 筆")
+        # quick add
+        d = st.date_input("日期", value=date.today())
+        cat = st.selectbox("類別", list(points_map.keys()) or ["活動護持（含宿訪）"])
+        title = st.text_input("標題", value="")
+        names_text = st.text_area("參與名單（以、或，或空白分隔，可含註記）")
+        if st.button("➕ 新增到列表"):
+            names = normalize_names(names_text)
+            new_rows = pd.DataFrame([{"date": d.isoformat(), "title": title or cat,
+                                      "category": cat, "participant": n} for n in names])
+            st.session_state.events = pd.concat([st.session_state.events, new_rows], ignore_index=True)
+            save_events(st.session_state.events, data_file)
+            st.success(f"已新增 {len(new_rows)} 筆")
+
+        st.markdown("#### 🧰 歸檔與重置")
+        if st.button("🗄️ 歸檔並清空"):
+            backup_name = f"events_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            st.session_state.events.to_csv(backup_name, index=False, encoding="utf-8-sig")
+            st.session_state.events = st.session_state.events.iloc[0:0]
+            save_events(st.session_state.events, data_file)
+            st.success(f"已備份到 {backup_name} 並清空。")
+        if st.button("♻️ 只清空（不備份）"):
+            st.session_state.events = st.session_state.events.iloc[0:0]
+            save_events(st.session_state.events, data_file)
+            st.success("已清空所有資料（未備份）。")
+
+        st.download_button("⬇️ 下載事件CSV",
+                           data=st.session_state.events.to_csv(index=False, encoding="utf-8-sig"),
+                           file_name="events_export.csv", mime="text/csv")
+
+    with right:
+        st.subheader("📊 統計與獎勵")
+        summary = aggregate(st.session_state.events, points_map, rewards)
+        st.dataframe(summary, use_container_width=True, height=520)
+
+# --- Tab 2 ---
+with tabs[1]:
+    st.subheader("生成報到 QR Code")
+    public_base = st.text_input("公開網址", value="")
+    if public_base.endswith("/"):
+        public_base = public_base[:-1]
+    title = st.text_input("活動標題", value="迎新晚會")
+    category = st.selectbox("類別", list(points_map.keys()) or ["活動護持（含宿訪）"])
+    qr_date = st.date_input("活動日期", value=date.today())
+    event_payload = json.dumps({"title": title or category,
+                                "category": category,
+                                "date": qr_date.isoformat()}, ensure_ascii=False)
+    encoded = quote(event_payload, safe="")
+    if public_base:
+        checkin_url = f"{public_base}/?mode=checkin&event={encoded}"
+        st.code(checkin_url, language="text")
+        img = qrcode.make(checkin_url)
+        buf = io.BytesIO(); img.save(buf, format="PNG")
+        st.image(buf.getvalue(), width=250)
+        st.download_button("⬇️ 下載 QR 圖片", data=buf.getvalue(),
+                           file_name=f"checkin_{datetime.now().strftime('%Y%m%d')}.png",
+                           mime="image/png")
