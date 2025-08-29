@@ -173,22 +173,35 @@ with tabs[0]:
 # --- Tab 2 ---
 with tabs[1]:
     st.subheader("生成報到 QR Code")
-    public_base = st.text_input("公開網址", value="")
+
+    # 加上唯一 key，避免 DuplicateElementId
+    public_base = st.text_input("公開網址", value="", key="qr_public_url")
     if public_base.endswith("/"):
         public_base = public_base[:-1]
-    title = st.text_input("活動標題", value="迎新晚會")
-    category = st.selectbox("類別", list(points_map.keys()) or ["活動護持（含宿訪）"])
-    qr_date = st.date_input("活動日期", value=date.today())
-    event_payload = json.dumps({"title": title or category,
-                                "category": category,
-                                "date": qr_date.isoformat()}, ensure_ascii=False)
+
+    title = st.text_input("活動標題", value="迎新晚會", key="qr_title")
+    category = st.selectbox("類別", list(points_map.keys()) or ["活動護持（含宿訪）"], key="qr_category")
+    qr_date = st.date_input("活動日期", value=date.today(), key="qr_date")
+
+    event_payload = json.dumps({
+        "title": title or category,
+        "category": category,
+        "date": qr_date.isoformat()
+    }, ensure_ascii=False)
     encoded = quote(event_payload, safe="")
+
     if public_base:
         checkin_url = f"{public_base}/?mode=checkin&event={encoded}"
+        st.write("**報到連結：**")
         st.code(checkin_url, language="text")
+
+        # 產生 QR
         img = qrcode.make(checkin_url)
-        buf = io.BytesIO(); img.save(buf, format="PNG")
-        st.image(buf.getvalue(), width=250)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        st.image(buf.getvalue(), caption="請讓大家掃描此 QR 報到", width=260)
         st.download_button("⬇️ 下載 QR 圖片", data=buf.getvalue(),
-                           file_name=f"checkin_{datetime.now().strftime('%Y%m%d')}.png",
+                           file_name=f"checkin_qr_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
                            mime="image/png")
+    else:
+        st.info("請先貼上當前公開網址（例如本頁的根網址 https://xxx.streamlit.app）。")
