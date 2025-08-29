@@ -1,0 +1,24 @@
+{
+  " scoring_items": [
+    {"category": "上研究班（新民、至善）", "points": 1},
+    {"category": "活動護持（含宿訪）", "points": 1},
+    {"category": "參與獻供", "points": 1},
+    {"category": "參與晨讀", "points": 1},
+    {"category": "參與辦道", "points": 2},
+    {"category": "參與讀書會／與學長姐有約", "points": 2},
+    {"category": "法會護持一天", "points": 2},
+    {"category": "參與成全／道務會議", "points": 2},
+    {"category": "背誦經典", "points": 2},
+    {"category": "練講", "points": 3},
+    {"category": "帶人求道", "points": 5},
+    {"category": "帶人開法會", "points": 7},
+    {"category": "帶人進研究班", "points": 10}
+  ],
+  "rewards": [
+    {"threshold": 6, "reward": "乖乖1包（口味不限）"},
+    {"threshold": 10, "reward": "發一崇德系列飲品2罐"},
+    {"threshold": 20, "reward": "活動免費1次"},
+    {"threshold": 40, "reward": "學長姐帶你吃崇德發"},
+    {"threshold": 60, "reward": "果然匯／熱炒吃到飽"}
+  ]
+}
