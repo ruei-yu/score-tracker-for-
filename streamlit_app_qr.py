@@ -169,6 +169,17 @@ with tabs[0]:
         st.subheader("📊 統計與獎勵")
         summary = aggregate(st.session_state.events, points_map, rewards)
         st.dataframe(summary, use_container_width=True, height=520)
+     # 額外：活動明細表
+    st.markdown("#### 📅 個人參加明細")
+    if not st.session_state.events.empty:
+        selected_person = st.selectbox("選擇要查看的參加者", 
+                                       sorted(st.session_state.events["participant"].unique()))
+        person_events = st.session_state.events.query("participant == @selected_person")
+        st.dataframe(person_events[["date", "title", "category"]]
+                     .sort_values("date"), 
+                     use_container_width=True)
+    else:
+        st.info("目前尚無活動紀錄。")
 
 # --- Tab 2 ---
 with tabs[1]:
