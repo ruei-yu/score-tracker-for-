@@ -5,7 +5,10 @@ from datetime import date, datetime
 from urllib.parse import quote, unquote
 import qrcode
 
-st.set_page_config(page_title="護持活動集點(for幹部)", page_icon="🔢", layout="wide")
+st.set_page_config(
+    page_title="參與活動集點(for幹部)",  # 瀏覽器分頁標題
+    page_icon="🔢",
+    layout="wide",
 
 # ================= Helpers =================
 def load_config(file):
