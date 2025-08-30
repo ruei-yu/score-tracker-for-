@@ -95,29 +95,49 @@ if mode == "checkin":
     except Exception:
         pass
 
-    st.info(f"活動：**{title}**｜類別：**{category}**｜日期：{target_date}")
-    name = st.text_input("請輸入姓名（可含括號註記）", key="ci_name")
+     st.info(f"活動：**{title}**｜類別：**{category}**｜日期：{target_date}")
+
+    # ✅ 一次輸入多位：用「、」「，」或空白分隔；可含括號註記（會自動去除）
+    names_input = st.text_area(
+        "請輸入姓名（可用「、」「，」或空白分隔；可含括號註記）",
+        key="ci_names",
+        placeholder="例如：曉瑩、筱晴、崇萱（六） 佳宜 睿妤"
+    )
+
     if st.button("送出報到", key="ci_submit"):
-        clean = normalize_names(name)
-        if not clean:
-            st.error("請輸入姓名。")
+        names = normalize_names(names_input)
+        if not names:
+            st.error("請至少輸入一位姓名。")
         else:
-            exists = (
-                (events_df["date"] == target_date) &
-                (events_df["title"] == title) &
-                (events_df["category"] == category) &
-                (events_df["participant"] == clean[0])
-            ).any()
-            if exists:
-                st.warning(f"⚠️ {clean[0]} 已經報到過了，無法重複。")
-            else:
-                new = pd.DataFrame([{
-                    "date": target_date, "title": title,
-                    "category": category, "participant": clean[0]
-                }])
-                events_df = pd.concat([events_df, new], ignore_index=True)
+            # 加速查重：同日、同標題、同類別既有名單
+            existing = set(
+                events_df.loc[
+                    (events_df["date"] == target_date) &
+                    (events_df["title"] == title) &
+                    (events_df["category"] == category),
+                    "participant"
+                ].astype(str).tolist()
+            )
+
+            to_add, skipped = [], []
+            for n in names:
+                if n in existing:
+                    skipped.append(n)   # 已報到，跳過
+                else:
+                    to_add.append({
+                        "date": target_date, "title": title,
+                        "category": category, "participant": n
+                    })
+                    existing.add(n)    # 防止同批重覆
+
+            if to_add:
+                events_df = pd.concat([events_df, pd.DataFrame(to_add)], ignore_index=True)
                 save_events(events_df, data_file)
-                st.success(f"已報到：{clean[0]}")
+                st.success(f"已報到 {len(to_add)} 人：{'、'.join([r['participant'] for r in to_add])}")
+
+            if skipped:
+                st.warning(f"以下人員已經報到過，已跳過：{'、'.join(skipped)}")
+
     st.stop()
 
 # ---------- Admin / Normal UI ----------
