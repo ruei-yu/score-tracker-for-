@@ -95,7 +95,7 @@ if mode == "checkin":
     except Exception:
         pass
 
-     st.info(f"活動：**{title}**｜類別：**{category}**｜日期：{target_date}")
+    st.info(f"活動：**{title}**｜類別：**{category}**｜日期：{target_date}")
 
     # ✅ 一次輸入多位：用「、」「，」或空白分隔；可含括號註記（會自動去除）
     names_input = st.text_area(
