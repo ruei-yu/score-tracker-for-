@@ -5,7 +5,7 @@ from datetime import date, datetime
 from urllib.parse import quote, unquote
 import qrcode
 
-st.set_page_config(page_title="集點計分器 + 報到QR", page_icon="🔢", layout="wide")
+st.set_page_config(page_title="護持活動集點(for幹部)", page_icon="🔢", layout="wide")
 
 # ================= Helpers =================
 def load_config(file):
@@ -128,7 +128,7 @@ if mode == "checkin":
     st.stop()
 
 # ================= Admin UI =================
-st.title("1️⃣2️⃣3️⃣4️⃣  集點計分器 + 報到QR")
+st.title("🔢護持活動集點(for幹部)")
 
 # Sidebar settings
 st.sidebar.title("⚙️ 設定")
