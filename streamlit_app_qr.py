@@ -5,10 +5,12 @@ from datetime import date, datetime
 from urllib.parse import quote, unquote
 import qrcode
 
+# --- 頁面設定（瀏覽器分頁標題 / 圖示 / 版型） ---
 st.set_page_config(
-    page_title="參與活動集點(for幹部)",  # 瀏覽器分頁標題
+    page_title="參與活動集點(for幹部)",
     page_icon="🔢",
     layout="wide",
+)
 
 # ================= Helpers =================
 def load_config(file):
@@ -25,6 +27,7 @@ def normalize_names(s: str):
     if not s:
         return []
     raw = (s.replace("、", ",")
+             .replace(" ", " ")  # 全形空白
              .replace("，", ",")
              .replace("（", "(")
              .replace("）", ")")
@@ -131,13 +134,14 @@ if mode == "checkin":
     st.stop()
 
 # ================= Admin UI =================
-st.title("🔢護持活動集點(for幹部)")
+# 主頁面 H1 標題（只有在非 checkin 模式時才會顯示）
+st.title("🔢參與活動集點(for幹部)")
 
 # Sidebar settings
 st.sidebar.title("⚙️ 設定")
 cfg_file  = st.sidebar.text_input("設定檔路徑", value="points_config.json", key="sb_cfg_path")
 data_file = st.sidebar.text_input("資料儲存CSV路徑", value="events.csv",        key="sb_data_path")
- 
+
 if "config" not in st.session_state:
     st.session_state.config = load_config(cfg_file)
 if "events" not in st.session_state:
