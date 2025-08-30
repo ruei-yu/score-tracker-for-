@@ -228,6 +228,52 @@ with tabs[0]:
             )
         else:
             st.info("目前尚無活動紀錄。")
+         # === 依日期查看參與者 ===
+    st.markdown("#### 📆 依日期查看參與者")
+    if not st.session_state.events.empty:
+        # 取得所有日期（字串），供選擇
+        all_dates = sorted(st.session_state.events["date"].astype(str).unique())
+        if all_dates:
+            sel_date = st.selectbox("選擇日期", all_dates, key="bydate_date")
+
+            day_df = st.session_state.events[
+                st.session_state.events["date"].astype(str) == sel_date
+            ].copy()
+
+            if day_df.empty:
+                st.info("這一天目前沒有任何紀錄。")
+            else:
+                # 可選擇要看的類別（預設全選）
+                cat_options = sorted(day_df["category"].astype(str).unique())
+                sel_cats = st.multiselect(
+                    "篩選類別（可多選）", options=cat_options, default=cat_options, key="bydate_cats"
+                )
+                show_df = day_df[day_df["category"].isin(sel_cats)].copy()
+
+                # 顯示參與者名單（去重、排序）
+                names = sorted(show_df["participant"].astype(str).unique())
+                st.write(f"**共 {len(names)} 人**：", "、".join(names) if names else "（無）")
+
+                # 明細表：誰參加了什麼活動
+                st.dataframe(
+                    show_df[["participant", "title", "category"]]
+                        .sort_values(["category", "participant"]),
+                    use_container_width=True,
+                    height=300,
+                )
+
+                # 下載當日名單/明細
+                st.download_button(
+                    "⬇️ 下載當日明細 CSV",
+                    data=show_df.to_csv(index=False, encoding="utf-8-sig"),
+                    file_name=f"events_{sel_date}.csv",
+                    mime="text/csv",
+                    key="bydate_download",
+                )
+        else:
+            st.info("尚無任何日期可選。")
+    else:
+        st.info("目前尚無活動紀錄。")
 
 # --- Tab 2: 產生報到 QR ---
 with tabs[1]:
