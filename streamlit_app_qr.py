@@ -7,7 +7,7 @@ import qrcode
 
 # --- 頁面設定（瀏覽器分頁標題 / 圖示 / 版型） ---
 st.set_page_config(
-    page_title="參與活動集點(for幹部)",
+    page_title="護持活動集點(for幹部)",
     page_icon="🔢",
     layout="wide",
 )
@@ -135,7 +135,7 @@ if mode == "checkin":
 
 # ================= Admin UI =================
 # 主頁面 H1 標題（只有在非 checkin 模式時才會顯示）
-st.title("🔢參與活動集點(for幹部)")
+st.title("🔢護持活動集點(for幹部)")
 
 # Sidebar settings
 st.sidebar.title("⚙️ 設定")
