@@ -134,7 +134,7 @@ st.title("🔢護持活動集點(for幹部)")
 st.sidebar.title("⚙️ 設定")
 cfg_file  = st.sidebar.text_input("設定檔路徑", value="points_config.json", key="sb_cfg_path")
 data_file = st.sidebar.text_input("資料儲存CSV路徑", value="events.csv",        key="sb_data_path")
-
+ 
 if "config" not in st.session_state:
     st.session_state.config = load_config(cfg_file)
 if "events" not in st.session_state:
