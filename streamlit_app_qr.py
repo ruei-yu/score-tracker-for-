@@ -46,12 +46,10 @@ def aggregate(df, points_map, rewards):
                        values="points", aggfunc="count", fill_value=0)
           .sort_index()
     )
-    # 加總
     summary["總點數"] = 0
     for cat, pt in points_map.items():
         if cat in summary.columns:
             summary["總點數"] += summary[cat] * pt
-    # 門檻
     thresholds = sorted([r["threshold"] for r in rewards])
     def reward_badge(x):
         gain = [t for t in thresholds if x >= t]
@@ -118,10 +116,8 @@ if mode == "checkin":
                 if n in existing:
                     skipped.append(n)
                 else:
-                    to_add.append({
-                        "date": target_date, "title": title,
-                        "category": category, "participant": n
-                    })
+                    to_add.append({"date": target_date, "title": title,
+                                   "category": category, "participant": n})
                     existing.add(n)
             if to_add:
                 events_df = pd.concat([events_df, pd.DataFrame(to_add)], ignore_index=True)
@@ -172,10 +168,17 @@ with st.sidebar.expander("🎁 編輯獎勵門檻", expanded=False):
         save_config(config, cfg_file)
         st.success("已儲存獎勵門檻。")
 
-# ---------- Main Tabs ----------
-tabs = st.tabs(["🟪 產生 QR", "📝 現場報到", "👤 個人明細", "🏆 排行榜", "📒 完整紀錄"])
+# ---------- Main Tabs (reordered) ----------
+tabs = st.tabs([
+    "🟪 產生 QRcode",
+    "📝 現場報到",
+    "📆 依日期查看參與者",
+    "👤 個人明細",
+    "📒 完整記錄",
+    "🏆 排行榜",
+])
 
-# 1) 產生 QR
+# 1) 產生 QRcode
 with tabs[0]:
     st.subheader("生成報到 QR Code")
     public_base = st.text_input("公開網址（本頁網址）", value="", key="qr_public_url")
@@ -185,9 +188,11 @@ with tabs[0]:
     qr_category = st.selectbox("類別", list(points_map.keys()) or ["活動護持（含宿訪）"], key="qr_category")
     qr_date = st.date_input("活動日期", value=date.today(), key="qr_date")
 
-    payload = json.dumps({"title": qr_title or qr_category,
-                          "category": qr_category,
-                          "date": qr_date.isoformat()}, ensure_ascii=False)
+    payload = json.dumps({
+        "title": qr_title or qr_category,
+        "category": qr_category,
+        "date": qr_date.isoformat()
+    }, ensure_ascii=False)
     encoded = quote(payload, safe="")
     if public_base:
         checkin_url = f"{public_base}/?mode=checkin&event={encoded}"
@@ -202,14 +207,13 @@ with tabs[0]:
     else:
         st.info("請貼上你的 .streamlit.app 網址（本頁網址）。")
 
-# 2) 現場報到（管理者用）
+# 2) 現場報到
 with tabs[1]:
     st.subheader("現場快速報到（多名一起）")
-    # 活動三要素
     on_title = st.text_input("活動標題", value="未命名活動", key="on_title")
     on_category = st.selectbox("類別", list(points_map.keys()) or ["活動護持（含宿訪）"], key="on_category")
     on_date = st.date_input("日期", value=date.today(), key="on_date")
-    st.caption("提示：下方可一次輸入多位，以「、」「，」「空白」分隔，可含括號註記。")
+    st.caption("提示：可一次輸入多位，以「、」「，」「空白」分隔，可含括號註記。")
 
     names_input = st.text_area("姓名清單", placeholder="曉瑩、筱晴（六） 佳宜 睿妤", key="on_names")
     if st.button("➕ 加入報到名單", key="on_add"):
@@ -243,33 +247,9 @@ with tabs[1]:
             if skipped:
                 st.warning(f"已跳過（重複）：{'、'.join(skipped)}")
 
-# 3) 個人明細
+# 3) 依日期查看參與者（新分頁）
 with tabs[2]:
-    st.subheader("個人參加明細")
-    if st.session_state.events.empty:
-        st.info("目前尚無活動紀錄。")
-    else:
-        c1, c2 = st.columns(2)
-        with c1:
-            person = st.selectbox("選擇參加者", 
-                                  sorted(st.session_state.events["participant"].unique()),
-                                  key="detail_person")
-        with c2:
-            only_cat = st.multiselect("篩選類別（可多選）",
-                                      options=sorted(st.session_state.events["category"].unique()),
-                                      default=None, key="detail_cats")
-        dfp = st.session_state.events.query("participant == @person").copy()
-        if only_cat:
-            dfp = dfp[dfp["category"].isin(only_cat)]
-        st.dataframe(dfp[["date","title","category"]].sort_values("date"),
-                     use_container_width=True, height=350)
-        st.download_button("⬇️ 下載此人明細 CSV",
-                           data=dfp.to_csv(index=False, encoding="utf-8-sig"),
-                           file_name=f"{person}_records.csv", mime="text/csv",
-                           key="dl_person")
-
-    st.markdown("---")
-    st.subheader("📆 依日期查看參與者")
+    st.subheader("依日期查看參與者")
     if st.session_state.events.empty:
         st.info("目前尚無活動紀錄。")
     else:
@@ -291,13 +271,32 @@ with tabs[2]:
                                file_name=f"events_{sel_date_str}.csv", mime="text/csv",
                                key="bydate_download")
 
-# 4) 排行榜
+# 4) 個人明細
 with tabs[3]:
-    st.subheader("排行榜（依總點數）")
-    summary = aggregate(st.session_state.events, points_map, rewards)
-    st.dataframe(summary, use_container_width=True, height=520)
+    st.subheader("個人參加明細")
+    if st.session_state.events.empty:
+        st.info("目前尚無活動紀錄。")
+    else:
+        c1, c2 = st.columns(2)
+        with c1:
+            person = st.selectbox("選擇參加者",
+                                  sorted(st.session_state.events["participant"].unique()),
+                                  key="detail_person")
+        with c2:
+            only_cat = st.multiselect("篩選類別（可多選）",
+                                      options=sorted(st.session_state.events["category"].unique()),
+                                      default=None, key="detail_cats")
+        dfp = st.session_state.events.query("participant == @person").copy()
+        if only_cat:
+            dfp = dfp[dfp["category"].isin(only_cat)]
+        st.dataframe(dfp[["date","title","category"]].sort_values("date"),
+                     use_container_width=True, height=350)
+        st.download_button("⬇️ 下載此人明細 CSV",
+                           data=dfp.to_csv(index=False, encoding="utf-8-sig"),
+                           file_name=f"{person}_records.csv", mime="text/csv",
+                           key="dl_person")
 
-# 5) 完整紀錄
+# 5) 完整記錄
 with tabs[4]:
     st.subheader("完整紀錄（可編輯）")
     st.caption("欄位：date, title, category, participant")
@@ -319,6 +318,17 @@ with tabs[4]:
             st.session_state.events = edited.iloc[0:0]
             save_events(st.session_state.events, data_file)
             st.success(f"已備份到 {backup_name} 並清空。")
+    with c3:
+        if st.button("♻️ 只清空（不備份）", key="full_clear"):
+            st.session_state.events = edited.iloc[0:0]
+            save_events(st.session_state.events, data_file)
+            st.success("已清空所有資料（未備份）。")
+
+# 6) 排行榜
+with tabs[5]:
+    st.subheader("排行榜（依總點數）")
+    summary = aggregate(st.session_state.events, points_map, rewards)
+    st.dataframe(summary, use_container_width=True, height=520)
     with c3:
         if st.button("♻️ 只清空（不備份）", key="full_clear"):
             st.session_state.events = edited.iloc[0:0]
