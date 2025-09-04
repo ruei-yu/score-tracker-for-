@@ -308,6 +308,11 @@ with tabs[0]:
                            data=links_df.to_csv(index=False, encoding="utf-8-sig"),
                            file_name="links.csv", mime="text/csv",
                            key="links_download_btn")
+    # 清空 links.csv
+    if st.button("🧹 清空所有短代碼（links.csv）", key="links_clear_btn"):
+        st.session_state.links = st.session_state.links.iloc[0:0]
+        save_links(st.session_state.links, links_file)
+        st.success("已清空所有短代碼。")
 
 # -------- 1) 現場報到 --------
 with tabs[1]:
