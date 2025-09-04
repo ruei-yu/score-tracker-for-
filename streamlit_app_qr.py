@@ -114,8 +114,10 @@ event_param = qp.get("event", "")
 
 if mode == "checkin":
     st.markdown("### ✅ 線上報到（公開頁）")
-    data_file  = st.text_input("資料儲存CSV路徑", value="events.csv", key="pub_datafile_input")
-    links_file = st.text_input("連結代碼CSV路徑", value="links.csv", key="pub_linksfile_input")
+
+    # ✅ 公開頁隱藏這兩個路徑輸入框：固定檔案名稱，避免被亂改
+    data_file  = "events.csv"
+    links_file = "links.csv"
 
     events_df = load_events(data_file)
     links_df  = load_links(links_file)
@@ -148,12 +150,27 @@ if mode == "checkin":
 
     st.info(f"活動：**{title}**｜類別：**{category}**｜日期：{target_date}")
 
-    # 多名同時報到
-    names_input = st.text_area(
-        "請輸入姓名（可用「、」「，」或空白分隔；可含括號註記）",
-        key="pub_names_area",
-        placeholder="例如：曉瑩、筱晴、崇萱（六） 佳宜 睿妤"
+    # ==== 提示（紅字粗體 + 下一行黑字） ====
+    st.markdown(
+        """
+        <div style="color:#d32f2f; font-weight:700;">
+          請務必輸入全名（例：陳曉瑩）
+        </div>
+        <div style="color:#000;">
+          （可一次多人報到，用「、」「，」或空白分隔）
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
+
+    # 多名同時報到（隱藏預設標籤）
+    names_input = st.text_area(
+        label="姓名清單",
+        key="pub_names_area",
+        placeholder="例如：陳曉瑩、林筱晴、黃崇萱 佳宜 睿妤",
+        label_visibility="collapsed",
+    )
+
     if st.button("送出報到", key="pub_submit_btn"):
         names = normalize_names(names_input)
         if not names:
@@ -186,7 +203,7 @@ if mode == "checkin":
 # ================= Admin UI =================
 st.title("🔢護持活動集點(for幹部)")
 
-# Sidebar settings
+# Sidebar settings（管理端可調整路徑）
 st.sidebar.title("⚙️ 設定")
 cfg_file   = st.sidebar.text_input("設定檔路徑", value="points_config.json", key="sb_cfg_path")
 data_file  = st.sidebar.text_input("資料儲存CSV路徑", value="events.csv",        key="sb_data_path")
@@ -239,7 +256,7 @@ tabs = st.tabs([
 
 # -------- 0) 產生 QRcode（含短代碼） --------
 with tabs[0]:
-    st.subheader("生成報到 QR Code（短連結）")
+    st.subheader("生成報到 QR Code")
     public_base = st.text_input("公開網址（本頁網址）", value="", key="qr_public_url_input")
     if public_base.endswith("/"):
         public_base = public_base[:-1]
@@ -261,17 +278,17 @@ with tabs[0]:
     short_url = f"{public_base}/?mode=checkin&c={code}"
 
     # 同時保留舊長連結（相容）
-    payload = json.dumps({"title": qr_title or qr_category,
-                          "category": qr_category,
-                          "date": iso}, ensure_ascii=False)
-    encoded = quote(payload, safe="")
-    long_url = f"{public_base}/?mode=checkin&event={encoded}"
+    #payload = json.dumps({"title": qr_title or qr_category,
+    #                      "category": qr_category,
+    #                      "date": iso}, ensure_ascii=False)
+    #encoded = quote(payload, safe="")
+    #long_url = f"{public_base}/?mode=checkin&event={encoded}"
 
     st.write("**短連結（建議分享這個）**")
     st.code(short_url, language="text")
 
-    st.write("（備用）長連結")
-    st.code(long_url, language="text")
+    #st.write("（備用）長連結")
+    #st.code(long_url, language="text")
 
     # 產生 QR（用短連結）
     if public_base:
@@ -297,9 +314,19 @@ with tabs[1]:
     on_title    = st.text_input("活動標題", value="未命名活動", key="on_title_input")
     on_category = st.selectbox("類別", list(points_map.keys()) or ["活動護持（含宿訪）"], key="on_category_select")
     on_date     = st.date_input("日期", value=date.today(), key="on_date_picker")
-    st.caption("提示：可一次輸入多位，以「、」「，」「空白」分隔，可含括號註記。")
-
-    names_input = st.text_area("姓名清單", placeholder="曉瑩、筱晴（六） 佳宜 睿妤", key="on_names_area")
+    st.markdown(
+        """
+        <div style="color:#d32f2f; font-weight:700;">
+          請務必輸入全名（例：陳曉瑩）
+        </div>
+        <div style="color:#000;">
+          （可一次多人報到，用「、」「，」或空白分隔）
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    names_input = st.text_area("姓名清單", placeholder="例如：陳曉瑩、林筱晴、黃崇萱 佳宜 睿妤",
+                               key="on_names_area", label_visibility="collapsed")
     if st.button("➕ 加入報到名單", key="on_add_btn"):
         ev = st.session_state.events.copy()
         target_date = on_date.isoformat()
