@@ -108,19 +108,14 @@ def upsert_link(links_df: pd.DataFrame, code: str, title: str, category: str, is
 # ============ Public check-in via URL ============
 qp = st.query_params
 mode = qp.get("mode", "")
-# 新增短代碼參數 c；保留舊參數 event 做相容
-code_param  = qp.get("c", "")
-event_param = qp.get("event", "")
-
 if mode == "checkin":
-    st.markdown("### ✅ 線上報到（公開頁）")
-
-    # 不要顯示輸入框，直接固定檔案路徑
+    # 公開頁 → 用固定路徑
     data_file  = "events.csv"
     links_file = "links.csv"
-
-    events_df = load_events(data_file)
-    links_df  = load_links(links_file)
+else:
+    # 管理頁 → 仍然能從 sidebar 輸入路徑
+    data_file = st.sidebar.text_input("資料儲存CSV路徑", value="events.csv")
+    links_file = st.sidebar.text_input("連結代碼CSV路徑", value="links.csv")
 
     # 取得活動資訊：優先用 c 代碼查 links.csv；若沒有 c 才嘗試舊的 event JSON
     title, category, target_date = "未命名活動", "活動護持（含宿訪）", date.today().isoformat()
@@ -166,7 +161,7 @@ st.markdown(
 names_input = st.text_area(
     label="姓名清單",
     key="pub_names_area",
-    placeholder="例如：陳曉瑩、林筱晴、黃崇萱 佳宜 睿妤",
+    placeholder="例如：陳曉瑩、方筱晴、許崇萱 黃佳宜 徐睿妤",
     label_visibility="collapsed",  # 把文字輸入框上方預設標籤藏起來（我們用上面的自訂說明）
 )
 
