@@ -168,7 +168,7 @@ if mode == "checkin":
     names_input = st.text_area(
         label="姓名清單",
         key="pub_names_area",
-        placeholder="例如：陳曉瑩、劉宜儒、許崇萱 黃佳宜 徐睿妤",
+        placeholder="例如：陳曉瑩、劉宜儒，許崇萱、黃佳宜 徐睿妤",
         label_visibility="collapsed",
     )
 
