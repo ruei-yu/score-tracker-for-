@@ -331,7 +331,7 @@ with tabs[1]:
         """,
         unsafe_allow_html=True,
     )
-    names_input = st.text_area("姓名清單", placeholder="例如：陳曉瑩、林筱晴、黃崇萱 佳宜 睿妤",
+    names_input = st.text_area("姓名清單", placeholder="例如：陳曉瑩、蕭雅云，張詠禎 徐睿妤",
                                key="on_names_area", label_visibility="collapsed")
     if st.button("➕ 加入報到名單", key="on_add_btn"):
         ev = st.session_state.events.copy()
