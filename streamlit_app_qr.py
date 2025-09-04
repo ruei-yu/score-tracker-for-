@@ -316,7 +316,7 @@ with tabs[0]:
 
 # -------- 1) 現場報到 --------
 with tabs[1]:
-    st.subheader("現場快速報到（多名一起）")
+    st.subheader("現場快速報到")
     on_title    = st.text_input("活動標題", value="未命名活動", key="on_title_input")
     on_category = st.selectbox("類別", list(points_map.keys()) or ["活動護持（含宿訪）"], key="on_category_select")
     on_date     = st.date_input("日期", value=date.today(), key="on_date_picker")
