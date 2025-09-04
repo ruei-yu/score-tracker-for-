@@ -150,7 +150,7 @@ if mode == "checkin":
 
     # 多名同時報到
     names_input = st.text_area(
-        "請輸入姓名（可用「、」「，」或空白分隔；可含括號註記）",
+        "請務必輸入全名(ex陳曉瑩)（可一次多人報到，用「、」「，」或空白分隔）",
         key="pub_names_area",
         placeholder="例如：曉瑩、筱晴、崇萱（六） 佳宜 睿妤"
     )
