@@ -108,14 +108,17 @@ def upsert_link(links_df: pd.DataFrame, code: str, title: str, category: str, is
 # ============ Public check-in via URL ============
 qp = st.query_params
 mode = qp.get("mode", "")
+# 新增短代碼參數 c；保留舊參數 event 做相容
+code_param  = qp.get("c", "")
+event_param = qp.get("event", "")
+
 if mode == "checkin":
-    # 公開頁 → 用固定路徑
-    data_file  = "events.csv"
-    links_file = "links.csv"
-else:
-    # 管理頁 → 仍然能從 sidebar 輸入路徑
-    data_file = st.sidebar.text_input("資料儲存CSV路徑", value="events.csv")
-    links_file = st.sidebar.text_input("連結代碼CSV路徑", value="links.csv")
+    st.markdown("### ✅ 線上報到（公開頁）")
+    data_file  = st.text_input("資料儲存CSV路徑", value="events.csv", key="pub_datafile_input")
+    links_file = st.text_input("連結代碼CSV路徑", value="links.csv", key="pub_linksfile_input")
+
+    events_df = load_events(data_file)
+    links_df  = load_links(links_file)
 
     # 取得活動資訊：優先用 c 代碼查 links.csv；若沒有 c 才嘗試舊的 event JSON
     title, category, target_date = "未命名活動", "活動護持（含宿訪）", date.today().isoformat()
@@ -145,7 +148,7 @@ else:
 
     st.info(f"活動：**{title}**｜類別：**{category}**｜日期：{target_date}")
 
-# 多名同時報到（標示：紅字粗體 + 黑字說明）
+    # 多名同時報到（標示：紅字粗體 + 黑字說明）
 st.markdown(
     """
     <div style="color:#d32f2f; font-weight:700; font-size:1rem;">
@@ -161,7 +164,7 @@ st.markdown(
 names_input = st.text_area(
     label="姓名清單",
     key="pub_names_area",
-    placeholder="例如：陳曉瑩、方筱晴、許崇萱 黃佳宜 徐睿妤",
+    placeholder="例如：陳曉瑩、劉宜儒、許崇萱 黃佳宜 徐睿妤",
     label_visibility="collapsed",  # 把文字輸入框上方預設標籤藏起來（我們用上面的自訂說明）
 )
 
@@ -252,7 +255,7 @@ tabs = st.tabs([
 
 # -------- 0) 產生 QRcode（含短代碼） --------
 with tabs[0]:
-    st.subheader("生成報到 QR Code")
+    st.subheader("生成報到 QR Code（短連結）")
     public_base = st.text_input("公開網址（本頁網址）", value="", key="qr_public_url_input")
     if public_base.endswith("/"):
         public_base = public_base[:-1]
@@ -274,17 +277,17 @@ with tabs[0]:
     short_url = f"{public_base}/?mode=checkin&c={code}"
 
     # 同時保留舊長連結（相容）
-    #payload = json.dumps({"title": qr_title or qr_category,
-    #                     "category": qr_category,
-    #                     "date": iso}, ensure_ascii=False)
-    #encoded = quote(payload, safe="")
-    #long_url = f"{public_base}/?mode=checkin&event={encoded}"
+    payload = json.dumps({"title": qr_title or qr_category,
+                          "category": qr_category,
+                          "date": iso}, ensure_ascii=False)
+    encoded = quote(payload, safe="")
+    long_url = f"{public_base}/?mode=checkin&event={encoded}"
 
     st.write("**短連結（建議分享這個）**")
     st.code(short_url, language="text")
 
-    #st.write("（備用）長連結")
-    #st.code(long_url, language="text")
+    st.write("（備用）長連結")
+    st.code(long_url, language="text")
 
     # 產生 QR（用短連結）
     if public_base:
