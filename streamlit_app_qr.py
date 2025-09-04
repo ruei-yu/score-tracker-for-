@@ -239,7 +239,7 @@ tabs = st.tabs([
 
 # -------- 0) 產生 QRcode（含短代碼） --------
 with tabs[0]:
-    st.subheader("生成報到 QR Code（短連結）")
+    st.subheader("生成報到 QR Code")
     public_base = st.text_input("公開網址（本頁網址）", value="", key="qr_public_url_input")
     if public_base.endswith("/"):
         public_base = public_base[:-1]
@@ -261,17 +261,17 @@ with tabs[0]:
     short_url = f"{public_base}/?mode=checkin&c={code}"
 
     # 同時保留舊長連結（相容）
-    payload = json.dumps({"title": qr_title or qr_category,
-                          "category": qr_category,
-                          "date": iso}, ensure_ascii=False)
-    encoded = quote(payload, safe="")
-    long_url = f"{public_base}/?mode=checkin&event={encoded}"
+    #payload = json.dumps({"title": qr_title or qr_category,
+    #                     "category": qr_category,
+    #                     "date": iso}, ensure_ascii=False)
+    #encoded = quote(payload, safe="")
+    #long_url = f"{public_base}/?mode=checkin&event={encoded}"
 
     st.write("**短連結（建議分享這個）**")
     st.code(short_url, language="text")
 
-    st.write("（備用）長連結")
-    st.code(long_url, language="text")
+    #st.write("（備用）長連結")
+    #st.code(long_url, language="text")
 
     # 產生 QR（用短連結）
     if public_base:
