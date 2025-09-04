@@ -114,8 +114,8 @@ event_param = qp.get("event", "")
 
 if mode == "checkin":
     st.markdown("### ✅ 線上報到（公開頁）")
-    data_file  = st.text_input("資料儲存CSV路徑", value="events.csv", key="pub_datafile_input")
-    links_file = st.text_input("連結代碼CSV路徑", value="links.csv", key="pub_linksfile_input")
+    data_file  = st.text_input("資料儲存CSV路徑(勿動)", value="events.csv", key="pub_datafile_input")
+    links_file = st.text_input("連結代碼CSV路徑(勿動)", value="links.csv", key="pub_linksfile_input")
 
     events_df = load_events(data_file)
     links_df  = load_links(links_file)
@@ -150,7 +150,7 @@ if mode == "checkin":
 
     # 多名同時報到
     names_input = st.text_area(
-        "請務必輸入全名(ex陳曉瑩)（可一次多人報到，用「、」「，」或空白分隔）",
+        "請務必輸入全名\n(ex陳曉瑩)（可一次多人報到，用「、」「，」或空白分隔）",
         key="pub_names_area",
         placeholder="例如：曉瑩、筱晴、崇萱（六） 佳宜 睿妤"
     )
