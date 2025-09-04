@@ -113,7 +113,7 @@ code_param  = qp.get("c", "")
 event_param = qp.get("event", "")
 
 if mode == "checkin":
-    st.markdown("### ✅ 線上報到（公開頁）")
+    st.markdown("### ✅ 線上報到")
 
     # ✅ 公開頁隱藏這兩個路徑輸入框：固定檔案名稱，避免被亂改
     data_file  = "events.csv"
@@ -154,10 +154,10 @@ if mode == "checkin":
     st.markdown(
         """
         <div style="color:#d32f2f; font-weight:700;">
-          請務必輸入全名（例：陳曉瑩）
+          請務必輸入全名
         </div>
         <div style="color:#000;">
-          （可一次多人報到，用「、」「，」或空白分隔）
+        （例：陳曉瑩）（可一次多人報到，用「、」「，」或空白分隔）
         </div>
         """,
         unsafe_allow_html=True,
