@@ -148,56 +148,40 @@ if mode == "checkin":
 
     st.info(f"活動：**{title}**｜類別：**{category}**｜日期：{target_date}")
 
-    # 多名同時報到（標示：紅字粗體 + 黑字說明）
-st.markdown(
-    """
-    <div style="color:#d32f2f; font-weight:700; font-size:1rem;">
-      請務必輸入全名
-    </div>
-    <div style="color:#000;">
-     （例：陳曉瑩）（可一次多人報到，用「、」「，」或空白分隔）
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-names_input = st.text_area(
-    label="姓名清單",
-    key="pub_names_area",
-    placeholder="例如：陳曉瑩、劉宜儒、許崇萱 黃佳宜 徐睿妤",
-    label_visibility="collapsed",  # 把文字輸入框上方預設標籤藏起來（我們用上面的自訂說明）
-)
-
-if st.button("送出報到", key="pub_submit_btn"):
-    names = normalize_names(names_input)
-    if not names:
-        st.error("請至少輸入一位姓名。")
-    else:
-        existing = set(
-            events_df.loc[
-                (events_df["date"] == target_date) &
-                (events_df["title"] == title) &
-                (events_df["category"] == category),
-                "participant"
-            ].astype(str).tolist()
-        )
-        to_add, skipped = [], []
-        for n in names:
-            if n in existing:
-                skipped.append(n)
-            else:
-                to_add.append({
-                    "date": target_date, "title": title,
-                    "category": category, "participant": n
-                })
-                existing.add(n)
-        if to_add:
-            events_df = pd.concat([events_df, pd.DataFrame(to_add)], ignore_index=True)
-            save_events(events_df, data_file)
-            st.success(f"已報到 {len(to_add)} 人：{'、'.join([r['participant'] for r in to_add])}")
-        if skipped:
-            st.warning(f"以下人員已經報到過，已跳過：{'、'.join(skipped)}")
-st.stop()
+    # 多名同時報到
+    names_input = st.text_area(
+        "請輸入姓名（可用「、」「，」或空白分隔；可含括號註記）",
+        key="pub_names_area",
+        placeholder="例如：曉瑩、筱晴、崇萱（六） 佳宜 睿妤"
+    )
+    if st.button("送出報到", key="pub_submit_btn"):
+        names = normalize_names(names_input)
+        if not names:
+            st.error("請至少輸入一位姓名。")
+        else:
+            existing = set(
+                events_df.loc[
+                    (events_df["date"] == target_date) &
+                    (events_df["title"] == title) &
+                    (events_df["category"] == category),
+                    "participant"
+                ].astype(str).tolist()
+            )
+            to_add, skipped = [], []
+            for n in names:
+                if n in existing:
+                    skipped.append(n)
+                else:
+                    to_add.append({"date": target_date, "title": title,
+                                   "category": category, "participant": n})
+                    existing.add(n)
+            if to_add:
+                events_df = pd.concat([events_df, pd.DataFrame(to_add)], ignore_index=True)
+                save_events(events_df, data_file)
+                st.success(f"已報到 {len(to_add)} 人：{'、'.join([r['participant'] for r in to_add])}")
+            if skipped:
+                st.warning(f"以下人員已經報到過，已跳過：{'、'.join(skipped)}")
+    st.stop()
 
 # ================= Admin UI =================
 st.title("🔢護持活動集點(for幹部)")
