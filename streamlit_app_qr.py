@@ -157,7 +157,8 @@ if mode == "checkin":
           請務必輸入全名
         </div>
         <div style="color:#000;">
-        （例：陳曉瑩）（可一次多人報到，用「、」「，」或空白分隔）
+        （例：陳曉瑩）
+        （可一次多人報到，用「、」「，」或空白分隔）
         </div>
         """,
         unsafe_allow_html=True,
@@ -167,7 +168,7 @@ if mode == "checkin":
     names_input = st.text_area(
         label="姓名清單",
         key="pub_names_area",
-        placeholder="例如：陳曉瑩、林筱晴、黃崇萱 佳宜 睿妤",
+        placeholder="例如：陳曉瑩、劉宜儒、許崇萱 黃佳宜 徐睿妤",
         label_visibility="collapsed",
     )
 
