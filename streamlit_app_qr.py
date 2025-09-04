@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
-import json, io
+import json, io, hashlib
 from datetime import date, datetime
 from urllib.parse import quote, unquote
 import qrcode
 
-# --- 頁面設定（瀏覽器分頁標題 / 圖示 / 版型） ---
+# --- 頁面設定 ---
 st.set_page_config(
     page_title="護持活動集點(for幹部)",
     page_icon="🔢",
@@ -72,29 +72,79 @@ def load_events(path):
     except Exception:
         return pd.DataFrame(columns=["date","title","category","participant"])
 
+# -------- Short link registry (for clean URLs) --------
+def load_links(path):
+    try:
+        df = pd.read_csv(path, dtype=str)
+        need_cols = {"code","title","category","date"}
+        if not need_cols.issubset(set(df.columns)):
+            return pd.DataFrame(columns=list(need_cols))
+        return df
+    except Exception:
+        return pd.DataFrame(columns=["code","title","category","date"])
+
+def save_links(df, path):
+    df.to_csv(path, index=False, encoding="utf-8-sig")
+
+def make_code(title: str, category: str, iso_date: str, length: int = 8) -> str:
+    """根據(標題, 類別, 日期)產生穩定短代碼；固定長度，英數字"""
+    base = f"{iso_date}|{category}|{title}".encode("utf-8")
+    h = hashlib.md5(base).hexdigest()  # 穩定且夠短
+    return h[:length].upper()
+
+def upsert_link(links_df: pd.DataFrame, code: str, title: str, category: str, iso_date: str) -> pd.DataFrame:
+    """新增或更新 links.csv 中某個代碼的活動資訊（同 code 覆蓋）"""
+    links_df = links_df.copy()
+    if "code" not in links_df.columns:
+        links_df = pd.DataFrame(columns=["code","title","category","date"])
+    mask = links_df["code"] == code
+    row = {"code": code, "title": title, "category": category, "date": iso_date}
+    if mask.any():
+        links_df.loc[mask, ["title","category","date"]] = [title, category, iso_date]
+    else:
+        links_df = pd.concat([links_df, pd.DataFrame([row])], ignore_index=True)
+    return links_df
+
 # ============ Public check-in via URL ============
 qp = st.query_params
 mode = qp.get("mode", "")
+# 新增短代碼參數 c；保留舊參數 event 做相容
+code_param  = qp.get("c", "")
 event_param = qp.get("event", "")
 
 if mode == "checkin":
     st.markdown("### ✅ 線上報到（公開頁）")
-    data_file = st.text_input("資料儲存CSV路徑", value="events.csv", key="pub_datafile_input")
-    events_df = load_events(data_file)
+    data_file  = st.text_input("資料儲存CSV路徑", value="events.csv", key="pub_datafile_input")
+    links_file = st.text_input("連結代碼CSV路徑", value="links.csv", key="pub_linksfile_input")
 
-    # event info from URL
+    events_df = load_events(data_file)
+    links_df  = load_links(links_file)
+
+    # 取得活動資訊：優先用 c 代碼查 links.csv；若沒有 c 才嘗試舊的 event JSON
     title, category, target_date = "未命名活動", "活動護持（含宿訪）", date.today().isoformat()
-    try:
-        decoded = unquote(event_param)
-        if decoded.strip().startswith("{"):
-            o = json.loads(decoded)
-            title = o.get("title", title)
-            category = o.get("category", category)
-            target_date = o.get("date", target_date)
-        else:
-            title = decoded or title
-    except Exception:
-        pass
+    resolved = False
+
+    if code_param:
+        rec = links_df.loc[links_df["code"].astype(str) == str(code_param)]
+        if not rec.empty:
+            title = rec.iloc[0]["title"]
+            category = rec.iloc[0]["category"]
+            target_date = rec.iloc[0]["date"]
+            resolved = True
+
+    if (not resolved) and event_param:
+        try:
+            decoded = unquote(event_param)
+            if decoded.strip().startswith("{"):
+                o = json.loads(decoded)
+                title = o.get("title", title)
+                category = o.get("category", category)
+                target_date = o.get("date", target_date)
+                resolved = True
+            else:
+                title = decoded or title
+        except Exception:
+            pass
 
     st.info(f"活動：**{title}**｜類別：**{category}**｜日期：{target_date}")
 
@@ -134,18 +184,20 @@ if mode == "checkin":
     st.stop()
 
 # ================= Admin UI =================
-# 主頁面 H1 標題（只有在非 checkin 模式時才會顯示）
 st.title("🔢護持活動集點(for幹部)")
 
 # Sidebar settings
 st.sidebar.title("⚙️ 設定")
-cfg_file  = st.sidebar.text_input("設定檔路徑", value="points_config.json", key="sb_cfg_path")
-data_file = st.sidebar.text_input("資料儲存CSV路徑", value="events.csv",        key="sb_data_path")
+cfg_file   = st.sidebar.text_input("設定檔路徑", value="points_config.json", key="sb_cfg_path")
+data_file  = st.sidebar.text_input("資料儲存CSV路徑", value="events.csv",        key="sb_data_path")
+links_file = st.sidebar.text_input("連結代碼CSV路徑", value="links.csv",         key="sb_links_path")
 
 if "config" not in st.session_state:
     st.session_state.config = load_config(cfg_file)
 if "events" not in st.session_state:
     st.session_state.events = load_events(data_file)
+if "links" not in st.session_state:
+    st.session_state.links = load_links(links_file)
 
 config = st.session_state.config
 scoring_items = config.get(" scoring_items", [])
@@ -185,9 +237,9 @@ tabs = st.tabs([
     "🏆 排行榜",             # 5
 ])
 
-# -------- 0) 產生 QRcode --------
+# -------- 0) 產生 QRcode（含短代碼） --------
 with tabs[0]:
-    st.subheader("生成報到 QR Code")
+    st.subheader("生成報到 QR Code（短連結）")
     public_base = st.text_input("公開網址（本頁網址）", value="", key="qr_public_url_input")
     if public_base.endswith("/"):
         public_base = public_base[:-1]
@@ -195,22 +247,49 @@ with tabs[0]:
     qr_category = st.selectbox("類別", list(points_map.keys()) or ["活動護持（含宿訪）"], key="qr_category_select")
     qr_date     = st.date_input("活動日期", value=date.today(), key="qr_date_picker")
 
+    iso = qr_date.isoformat()
+    code = make_code(qr_title or qr_category, qr_category, iso, length=8)
+
+    # 更新/寫入 links.csv
+    links_df = st.session_state.links
+    links_df = upsert_link(links_df, code=code, title=(qr_title or qr_category),
+                           category=qr_category, iso_date=iso)
+    st.session_state.links = links_df
+    save_links(links_df, links_file)
+
+    # 短連結：使用 ?mode=checkin&c=CODE
+    short_url = f"{public_base}/?mode=checkin&c={code}"
+
+    # 同時保留舊長連結（相容）
     payload = json.dumps({"title": qr_title or qr_category,
                           "category": qr_category,
-                          "date": qr_date.isoformat()}, ensure_ascii=False)
+                          "date": iso}, ensure_ascii=False)
     encoded = quote(payload, safe="")
+    long_url = f"{public_base}/?mode=checkin&event={encoded}"
+
+    st.write("**短連結（建議分享這個）**")
+    st.code(short_url, language="text")
+
+    st.write("（備用）長連結")
+    st.code(long_url, language="text")
+
+    # 產生 QR（用短連結）
     if public_base:
-        checkin_url = f"{public_base}/?mode=checkin&event={encoded}"
-        st.write("**報到連結：**")
-        st.code(checkin_url, language="text")
-        img = qrcode.make(checkin_url)
+        img = qrcode.make(short_url)
         buf = io.BytesIO(); img.save(buf, format="PNG")
-        st.image(buf.getvalue(), caption="請讓大家掃描此 QR 報到", width=260)
+        st.image(buf.getvalue(), caption=f"掃描報到 ｜ 代碼：{code}", width=260)
         st.download_button("⬇️ 下載 QR 圖片", data=buf.getvalue(),
-                           file_name=f"checkin_qr_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
+                           file_name=f"checkin_{code}.png",
                            mime="image/png", key="qr_download_btn")
     else:
-        st.info("請貼上你的 .streamlit.app 網址（本頁網址）。")
+        st.info("請貼上你的 .streamlit.app 根網址（本頁網址）。")
+
+    with st.expander("🔎 目前所有短代碼一覽", expanded=False):
+        st.dataframe(links_df.sort_values("date", ascending=False), use_container_width=True, height=220)
+        st.download_button("⬇️ 下載連結代碼 CSV",
+                           data=links_df.to_csv(index=False, encoding="utf-8-sig"),
+                           file_name="links.csv", mime="text/csv",
+                           key="links_download_btn")
 
 # -------- 1) 現場報到 --------
 with tabs[1]:
