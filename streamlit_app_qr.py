@@ -114,8 +114,10 @@ event_param = qp.get("event", "")
 
 if mode == "checkin":
     st.markdown("### ✅ 線上報到（公開頁）")
-    data_file  = st.text_input("資料儲存CSV路徑(勿動)", value="events.csv", key="pub_datafile_input")
-    links_file = st.text_input("連結代碼CSV路徑(勿動)", value="links.csv", key="pub_linksfile_input")
+
+    # 不要顯示輸入框，直接固定檔案路徑
+    data_file  = "events.csv"
+    links_file = "links.csv"
 
     events_df = load_events(data_file)
     links_df  = load_links(links_file)
@@ -152,10 +154,10 @@ if mode == "checkin":
 st.markdown(
     """
     <div style="color:#d32f2f; font-weight:700; font-size:1rem;">
-      請務必輸入全名（例：陳曉瑩）
+      請務必輸入全名
     </div>
     <div style="color:#000;">
-      （可一次多人報到，用「、」「，」或空白分隔）
+     （例：陳曉瑩）（可一次多人報到，用「、」「，」或空白分隔）
     </div>
     """,
     unsafe_allow_html=True,
