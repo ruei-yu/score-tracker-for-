@@ -5,8 +5,29 @@ from datetime import date, datetime
 from urllib.parse import quote, unquote
 import qrcode
 
-# === 固定使用這一份 Google Sheet ===
-# ✅ 從 secrets 讀取 sheet_id
+# --- 頁面設定（建議放最上面） ---
+st.set_page_config(
+    page_title="護持活動集點(for幹部)",
+    page_icon="🔢",
+    layout="wide",
+)
+
+# ================= Google Sheet Helpers =================
+from google.oauth2.service_account import Credentials
+import gspread
+from gspread.exceptions import WorksheetNotFound
+
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
+          "https://www.googleapis.com/auth/drive"]
+
+def _get_gspread_client():
+    # ✅ 從 secrets 讀 gcp_service_account
+    creds = Credentials.from_service_account_info(
+        dict(st.secrets["gcp_service_account"]), scopes=SCOPES
+    )
+    return gspread.authorize(creds)
+
+# === 固定使用這一份 Google Sheet（從 secrets 讀取） ===
 FIXED_SHEET_ID = st.secrets["google_sheets"]["sheet_id"]
 
 @st.cache_resource(show_spinner=False)
@@ -14,20 +35,8 @@ def open_spreadsheet_by_fixed_id():
     client = _get_gspread_client()
     return client.open_by_key(FIXED_SHEET_ID)
 
-# 一開始就打開試算表
+# ✅ 一開始就打開固定的 spreadsheet（只保留一次）
 sh = open_spreadsheet_by_fixed_id()
-
-
-# 啟動時就打開固定的 spreadsheet
-sh = open_spreadsheet_by_fixed_id()
-
-
-# --- 頁面設定 ---
-st.set_page_config(
-    page_title="護持活動集點(for幹部)",
-    page_icon="🔢",
-    layout="wide",
-)
 
 # ================= Google Sheet Helpers =================
 from google.oauth2.service_account import Credentials
@@ -215,19 +224,6 @@ qp = st.query_params
 mode = qp.get("mode", "")
 code_param  = qp.get("c", "")
 event_param = qp.get("event", "")
-sid_param   = qp.get("sid", "")  # 讓公開頁知道要寫入哪個 Sheet
-
-# 如果在 secrets 有 SHEET_ID，就當預設
-DEFAULT_SHEET_ID = st.secrets.get("SHEET_ID", "")
-sheet_id_boot = sid_param or DEFAULT_SHEET_ID
-
-# 嘗試先打開 SpreadSheet（公開報到頁也需要）
-sh = None
-if sheet_id_boot:
-    try:
-        sh = open_spreadsheet(_parse_sheet_id(sheet_id_boot))
-    except Exception:
-        sh = None
 
 # ============ Public check-in via URL ============
 if mode == "checkin":
@@ -413,9 +409,7 @@ with tabs[0]:
     save_links_to_sheet(sh, links_df)
 
     # ✅ 短連結：使用固定的 sheet，不需 sid
-    short_url = f"{public_base}/?mode=checkin&c={code}"
-    st.write("**短連結（建議分享這個）**")
-    st.code(short_url, language="text")
+    short_url = f"{public_base}/?mode=checkin&c={code}
 
     st.write("**短連結（建議分享這個）**")
     st.code(short_url, language="text")
