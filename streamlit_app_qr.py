@@ -6,12 +6,17 @@ from urllib.parse import quote, unquote
 import qrcode
 
 # === 固定使用這一份 Google Sheet ===
-FIXED_SHEET_ID = "1-KtuF0EFwALa3SWZM41Cljr7delspVSWKp0ECp_toT8"  # 你的試算表 ID
+# ✅ 從 secrets 讀取 sheet_id
+FIXED_SHEET_ID = st.secrets["google_sheets"]["sheet_id"]
 
 @st.cache_resource(show_spinner=False)
 def open_spreadsheet_by_fixed_id():
     client = _get_gspread_client()
     return client.open_by_key(FIXED_SHEET_ID)
+
+# 一開始就打開試算表
+sh = open_spreadsheet_by_fixed_id()
+
 
 # 啟動時就打開固定的 spreadsheet
 sh = open_spreadsheet_by_fixed_id()
@@ -25,23 +30,18 @@ st.set_page_config(
 )
 
 # ================= Google Sheet Helpers =================
+from google.oauth2.service_account import Credentials
+import gspread
+
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
           "https://www.googleapis.com/auth/drive"]
 
 def _get_gspread_client():
-    # 1) Streamlit Cloud: 使用 st.secrets["gcp_service_account"]
-    if "gcp_service_account" in st.secrets:
-        creds = Credentials.from_service_account_info(
-            dict(st.secrets["gcp_service_account"]), scopes=SCOPES
-        )
-        return gspread.authorize(creds)
-    # 2) 本地端: 使用 credentials.json
-    try:
-        creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
-        return gspread.authorize(creds)
-    except Exception as e:
-        st.error("找不到服務帳號憑證。請在 st.secrets 加入 gcp_service_account，或將 credentials.json 放在專案根目錄。")
-        raise e
+    # ✅ 從 secrets 讀 gcp_service_account
+    creds = Credentials.from_service_account_info(
+        dict(st.secrets["gcp_service_account"]), scopes=SCOPES
+    )
+    return gspread.authorize(creds)
 
 def _parse_sheet_id(s: str) -> str:
     if not s:
