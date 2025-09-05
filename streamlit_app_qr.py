@@ -267,7 +267,6 @@ if mode == "checkin":
 
     events_df = load_events_from_sheet(sh)
     links_df  = load_links_from_sheet(sh)
-    ...
 
 
     # 取得活動資訊：優先用 c 代碼查 links；若沒有 c 才嘗試舊的 event JSON
