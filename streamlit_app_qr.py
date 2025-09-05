@@ -561,3 +561,33 @@ with tabs[5]:
     st.subheader("排行榜（依總點數）")
     summary = aggregate(st.session_state.events, points_map, rewards)
     st.dataframe(summary, use_container_width=True, height=520)
+
+    # 如果沒有資料，就不要顯示匯出按鈕
+    if summary.empty:
+        st.info("目前沒有可匯出的排行榜資料。")
+    else:
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.download_button(
+                "⬇️ 下載排行榜 CSV",
+                data=summary.to_csv(index=False, encoding="utf-8-sig"),
+                file_name="leaderboard.csv",
+                mime="text/csv",
+                key="leaderboard_download_btn",
+            )
+
+        with c2:
+            # 匯出到固定分頁：leaderboard（覆蓋）
+            if st.button("📤 匯出排行榜到 Google Sheet（leaderboard）", key="leaderboard_export_btn"):
+                ws_lb = get_or_create_ws(sh, "leaderboard", list(summary.columns))
+                df_to_ws(ws_lb, summary, list(summary.columns))
+                st.success("已匯出到工作表：leaderboard（已覆蓋）。")
+
+        with c3:
+            # 另存快照：leaderboard_YYYYMMDD_HHMMSS
+            if st.button("📸 建立排行榜快照（新分頁）", key="leaderboard_snapshot_btn"):
+                snap_title = f"leaderboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                ws_snap = get_or_create_ws(sh, snap_title, list(summary.columns))
+                df_to_ws(ws_snap, summary, list(summary.columns))
+                st.success(f"已建立快照：{snap_title}")
+
