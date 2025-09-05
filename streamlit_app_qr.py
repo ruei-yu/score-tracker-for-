@@ -573,29 +573,35 @@ with tabs[3]:
 with tabs[4]:
     st.subheader("完整記錄（可編輯）")
     st.caption("欄位：date, title, category, participant")
+
     edited = st.data_editor(st.session_state.events, num_rows="dynamic",
                             use_container_width=True, key="full_editor_table")
-    st.session_state.events = edited
-    save_events_to_sheet(sh, edited)
+
+    # ✅ 只在非空時自動儲存；空表時避免覆蓋 Google Sheet
+    if edited is not None and not edited.empty:
+        st.session_state.events = edited
+        save_events_to_sheet(sh, edited)
+    else:
+        st.info("（安全保護）偵測到空表，已跳過寫回 Google Sheet，以避免意外清空。")
 
     c1, c2, c3 = st.columns(3)
     with c1:
         st.download_button("⬇️ 下載 CSV（匯出）",
-                           data=edited.to_csv(index=False, encoding="utf-8-sig"),
+                           data=(st.session_state.events).to_csv(index=False, encoding="utf-8-sig"),
                            file_name="events_export.csv", mime="text/csv",
                            key="full_download_btn")
     with c2:
         if st.button("🗄️ 歸檔並清空（建立新工作表備份）", key="full_archive_btn"):
             backup_title = f"events_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             ws_backup = get_or_create_ws(sh, backup_title, ["date","title","category","participant"])
-            df_to_ws(ws_backup, edited, ["date","title","category","participant"])
-            st.session_state.events = edited.iloc[0:0]
-            save_events_to_sheet(sh, st.session_state.events)
+            df_to_ws(ws_backup, st.session_state.events, ["date","title","category","participant"])
+            st.session_state.events = st.session_state.events.iloc[0:0]
+            save_events_to_sheet(sh, st.session_state.events)  # ← 這裡是刻意清空
             st.success(f"已備份到工作表：{backup_title} 並清空。")
     with c3:
         if st.button("♻️ 只清空（不備份）", key="full_clear_btn"):
-            st.session_state.events = edited.iloc[0:0]
-            save_events_to_sheet(sh, st.session_state.events)
+            st.session_state.events = st.session_state.events.iloc[0:0]
+            save_events_to_sheet(sh, st.session_state.events)  # ← 刻意清空
             st.success("已清空所有資料（未備份）。")
 
 # -------- 5) 排行榜 --------
