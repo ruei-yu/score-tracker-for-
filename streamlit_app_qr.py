@@ -79,88 +79,9 @@ def df_to_ws(ws, df: pd.DataFrame, expected_cols: list[str]):
     ws.clear()
     ws.update(data)
 
-# 開啟固定 spreadsheet（這裡只呼叫一次）
+# ✅ 只呼叫一次
 sh = open_spreadsheet_by_fixed_id()
 
-# ================= Google Sheet Helpers =================
-from google.oauth2.service_account import Credentials
-import gspread
-
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
-          "https://www.googleapis.com/auth/drive"]
-
-def _get_gspread_client():
-    # ✅ 從 secrets 讀 gcp_service_account
-    creds = Credentials.from_service_account_info(
-        dict(st.secrets["gcp_service_account"]), scopes=SCOPES
-    )
-    return gspread.authorize(creds)
-
-def _parse_sheet_id(s: str) -> str:
-    if not s:
-        return ""
-    s = s.strip()
-    if "docs.google.com" in s:
-        m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", s)
-        if m:
-            return m.group(1)
-    return s
-
-@st.cache_resource(show_spinner=False)
-def open_spreadsheet(sheet_id: str):
-    client = _get_gspread_client()
-    return client.open_by_key(sheet_id)
-
-def get_or_create_ws(sh, title: str, headers: list[str]):
-    try:
-        ws = sh.worksheet(title)
-        # 確保至少有表頭
-        values = ws.get_all_values()
-        if not values:
-            ws.update([headers])
-        else:
-            ex_header = [h.strip() for h in values[0]]
-            # 若缺少欄位，保留既有資料，後續在讀取/寫入補齊
-            for col in headers:
-                if col not in ex_header:
-                    ex_header.append(col)
-            if ex_header != values[0]:
-                # 只更新表頭列；資料列保持
-                ws.update([ex_header] + values[1:])
-        return ws
-    except WorksheetNotFound:
-        ws = sh.add_worksheet(title=title, rows=1000, cols=max(10, len(headers)))
-        ws.update([headers])
-        return ws
-
-def ws_to_df(ws, expected_cols: list[str]) -> pd.DataFrame:
-    values = ws.get_all_values()
-    if not values:
-        ws.update([expected_cols])
-        return pd.DataFrame(columns=expected_cols)
-    header = values[0]
-    data = values[1:]
-    df = pd.DataFrame(data, columns=header) if data else pd.DataFrame(columns=header)
-    # 補齊缺欄、只保留需要欄
-    for c in expected_cols:
-        if c not in df.columns:
-            df[c] = ""
-    return df[expected_cols]
-
-def df_to_ws(ws, df: pd.DataFrame, expected_cols: list[str]):
-    if df is None:
-        ws.clear()
-        ws.update([expected_cols])
-        return
-    # 確保欄位順序
-    for c in expected_cols:
-        if c not in df.columns:
-            df[c] = ""
-    df = df[expected_cols].copy()
-    # 轉字串避免 gspread 型別問題
-    data = [expected_cols] + df.astype(str).values.tolist()
-    ws.clear()
-    ws.update(data)
 
 # ================= Domain Helpers（你原本的） =================
 def normalize_names(s: str):
