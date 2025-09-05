@@ -421,6 +421,13 @@ tabs = st.tabs([
 
 # -------- 0) 產生 QRcode（含短代碼） --------
 with tabs[0]:
+    from utils_safe_url import show_safe_link_box
+
+    # 假設這裡生成報到網址
+    checkin_url = f"https://{st.secrets['domain']}.streamlit.app/?mode=checkin&c=abc123"
+
+    # 在頁面顯示安全格式
+    show_safe_link_box(checkin_url, title="活動報到網址")
     st.subheader("生成報到 QR Code")
     public_base = st.text_input("公開網址（本頁網址）", value="", key="qr_public_url_input")
     if public_base.endswith("/"):
