@@ -167,4 +167,419 @@ def load_config_from_sheet(sh):
     ws_items = get_or_create_ws(sh, "scoring_items", ["category","points"])
     ws_rewards = get_or_create_ws(sh, "rewards", ["threshold","reward"])
     items_df = ws_to_df(ws_items, ["category","points"])
-    rewards_df = ws_to_df(ws_rewards, ["thr]()
+    rewards_df = ws_to_df(ws_rewards, ["threshold","reward"])
+    cfg = {
+        "scoring_items": items_df.to_dict(orient="records"),
+        "rewards": rewards_df.to_dict(orient="records"),
+    }
+    return cfg
+
+def save_config_to_sheet(sh, cfg):
+    ws_items = get_or_create_ws(sh, "scoring_items", ["category","points"])
+    ws_rewards = get_or_create_ws(sh, "rewards", ["threshold","reward"])
+    items = pd.DataFrame(cfg.get("scoring_items", [])) if cfg.get("scoring_items") else pd.DataFrame(columns=["category","points"])
+    rewards = pd.DataFrame(cfg.get("rewards", [])) if cfg.get("rewards") else pd.DataFrame(columns=["threshold","reward"])
+    # 整數化
+    if "points" in items.columns:
+        items["points"] = pd.to_numeric(items["points"], errors="coerce").fillna(0).astype(int)
+    if "threshold" in rewards.columns:
+        rewards["threshold"] = pd.to_numeric(rewards["threshold"], errors="coerce").fillna(0).astype(int)
+    df_to_ws(ws_items, items, ["category","points"])
+    df_to_ws(ws_rewards, rewards, ["threshold","reward"])
+
+def load_events_from_sheet(sh) -> pd.DataFrame:
+    ws = get_or_create_ws(sh, "events", ["date","title","category","participant"])
+    return ws_to_df(ws, ["date","title","category","participant"])
+
+def save_events_to_sheet(sh, df: pd.DataFrame):
+    ws = get_or_create_ws(sh, "events", ["date","title","category","participant"])
+    df_to_ws(ws, df, ["date","title","category","participant"])
+
+def load_links_from_sheet(sh) -> pd.DataFrame:
+    ws = get_or_create_ws(sh, "links", ["code","title","category","date"])
+    return ws_to_df(ws, ["code","title","category","date"])
+
+def save_links_to_sheet(sh, df: pd.DataFrame):
+    ws = get_or_create_ws(sh, "links", ["code","title","category","date"])
+    df_to_ws(ws, df, ["code","title","category","date"])
+
+# ================= Query Params / Sheet ID bootstrap =================
+qp = st.query_params
+mode = qp.get("mode", "")
+code_param  = qp.get("c", "")
+event_param = qp.get("event", "")
+sid_param   = qp.get("sid", "")  # 讓公開頁知道要寫入哪個 Sheet
+
+# 如果在 secrets 有 SHEET_ID，就當預設
+DEFAULT_SHEET_ID = st.secrets.get("SHEET_ID", "")
+sheet_id_boot = sid_param or DEFAULT_SHEET_ID
+
+# 嘗試先打開 SpreadSheet（公開報到頁也需要）
+sh = None
+if sheet_id_boot:
+    try:
+        sh = open_spreadsheet(_parse_sheet_id(sheet_id_boot))
+    except Exception:
+        sh = None
+
+# ============ Public check-in via URL ============
+if mode == "checkin":
+    st.markdown("### ✅ 線上報到")
+
+    if not sh:
+        st.error("找不到 Google Sheet。請在短連結上加上 &sid=你的SheetID，或在部署環境設定 SHEET_ID。")
+        st.stop()
+
+    events_df = load_events_from_sheet(sh)
+    links_df  = load_links_from_sheet(sh)
+
+    # 取得活動資訊：優先用 c 代碼查 links；若沒有 c 才嘗試舊的 event JSON
+    title, category, target_date = "未命名活動", "活動護持（含宿訪）", date.today().isoformat()
+    resolved = False
+
+    if code_param:
+        rec = links_df.loc[links_df["code"].astype(str) == str(code_param)]
+        if not rec.empty:
+            title = rec.iloc[0]["title"]
+            category = rec.iloc[0]["category"]
+            target_date = rec.iloc[0]["date"]
+            resolved = True
+
+    if (not resolved) and event_param:
+        try:
+            decoded = unquote(event_param)
+            if decoded.strip().startswith("{"):
+                o = json.loads(decoded)
+                title = o.get("title", title)
+                category = o.get("category", category)
+                target_date = o.get("date", target_date)
+                resolved = True
+            else:
+                title = decoded or title
+        except Exception:
+            pass
+
+    st.info(f"活動：**{title}**｜類別：**{category}**｜日期：{target_date}")
+
+    st.markdown(
+        """
+        <div style="color:#d32f2f; font-weight:700;">
+          請務必輸入全名
+        </div>
+        <div style="color:#000;">
+        （例：陳曉瑩）
+        （可一次多人報到，用「、」「，」或空白分隔）
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    names_input = st.text_area(
+        label="姓名清單",
+        key="pub_names_area",
+        placeholder="例如：陳曉瑩、劉宜儒，許崇萱、黃佳宜 徐睿妤",
+        label_visibility="collapsed",
+    )
+
+    if st.button("送出報到", key="pub_submit_btn"):
+        names = normalize_names(names_input)
+        if not names:
+            st.error("請至少輸入一位姓名。")
+        else:
+            existing = set(
+                events_df.loc[
+                    (events_df["date"] == target_date) &
+                    (events_df["title"] == title) &
+                    (events_df["category"] == category),
+                    "participant"
+                ].astype(str).tolist()
+            )
+            to_add, skipped = [], []
+            for n in names:
+                if n in existing:
+                    skipped.append(n)
+                else:
+                    to_add.append({"date": target_date, "title": title,
+                                   "category": category, "participant": n})
+                    existing.add(n)
+            if to_add:
+                events_df = pd.concat([events_df, pd.DataFrame(to_add)], ignore_index=True)
+                save_events_to_sheet(sh, events_df)
+                st.success(f"已報到 {len(to_add)} 人：{'、'.join([r['participant'] for r in to_add])}")
+            if skipped:
+                st.warning(f"以下人員已經報到過，已跳過：{'、'.join(skipped)}")
+    st.stop()
+
+# ================= Admin UI =================
+st.title("🔢護持活動集點(for幹部)")
+
+# Sidebar settings（用 Google Sheet 而不是檔案路徑）
+st.sidebar.title("⚙️ 設定（Google Sheet）")
+sheet_id_input = st.sidebar.text_input(
+    "Google Sheet 網址或 ID",
+    value=sheet_id_boot,
+    help="建議先在 Google Drive 建好試算表並分享給服務帳號；可貼整個網址或只貼中間的 ID。"
+)
+
+if sheet_id_input:
+    try:
+        sh = open_spreadsheet(_parse_sheet_id(sheet_id_input))
+    except Exception as e:
+        st.sidebar.error("無法開啟此試算表，請確認 ID/網址與權限。")
+        sh = None
+else:
+    if not sh:
+        st.info("請先在左側貼上 Google Sheet 網址或 ID，或在 secrets 設定 SHEET_ID。")
+
+if not sh:
+    st.stop()
+
+# 載入設定 / 資料
+if "config" not in st.session_state:
+    st.session_state.config = load_config_from_sheet(sh)
+if "events" not in st.session_state:
+    st.session_state.events = load_events_from_sheet(sh)
+if "links" not in st.session_state:
+    st.session_state.links = load_links_from_sheet(sh)
+
+config = st.session_state.config
+# 統一 key：scoring_items
+scoring_items = config.get("scoring_items", [])
+rewards = config.get("rewards", [])
+# 轉換 points_map
+points_map = {}
+for i in scoring_items:
+    if "category" in i:
+        try:
+            points_map[i["category"]] = int(i.get("points", 0))
+        except:
+            points_map[i["category"]] = 0
+
+# Sidebar editors
+with st.sidebar.expander("➕ 編輯集點項目與點數", expanded=False):
+    st.caption("新增或調整表格後點『儲存設定』。")
+    items_df = pd.DataFrame(scoring_items) if scoring_items else pd.DataFrame(columns=["category","points"])
+    edited = st.data_editor(items_df, num_rows="dynamic", use_container_width=True, key="sb_items_editor")
+    if st.button("💾 儲存設定（集點項目）", key="sb_save_items_btn"):
+        cfg = st.session_state.config
+        # 清理空列與型別
+        if not edited.empty:
+            edited["category"] = edited["category"].astype(str)
+            edited["points"] = pd.to_numeric(edited["points"], errors="coerce").fillna(0).astype(int)
+            edited = edited.dropna(subset=["category"])
+        cfg["scoring_items"] = edited.to_dict(orient="records")
+        st.session_state.config = cfg
+        save_config_to_sheet(sh, cfg)
+        st.success("已儲存集點項目。")
+
+with st.sidebar.expander("🎁 編輯獎勵門檻", expanded=False):
+    rew_df = pd.DataFrame(rewards) if rewards else pd.DataFrame(columns=["threshold","reward"])
+    rew_edit = st.data_editor(rew_df, num_rows="dynamic", use_container_width=True, key="sb_rewards_editor")
+    if st.button("💾 儲存設定（獎勵）", key="sb_save_rewards_btn"):
+        cfg = st.session_state.config
+        if not rew_edit.empty:
+            rew_edit["reward"] = rew_edit["reward"].astype(str)
+            rew_edit["threshold"] = pd.to_numeric(rew_edit["threshold"], errors="coerce").fillna(0).astype(int)
+            rew_edit = rew_edit.dropna(subset=["threshold","reward"])
+        cfg["rewards"] = rew_edit.to_dict(orient="records")
+        st.session_state.config = cfg
+        save_config_to_sheet(sh, cfg)
+        st.success("已儲存獎勵門檻。")
+
+# ============== Tabs (custom order) ==============
+tabs = st.tabs([
+    "🟪 產生 QRcode",        # 0
+    "📝 現場報到",           # 1
+    "📆 依日期查看參與者",   # 2
+    "👤 個人明細",           # 3
+    "📒 完整記錄",           # 4
+    "🏆 排行榜",             # 5
+])
+
+# -------- 0) 產生 QRcode（含短代碼） --------
+with tabs[0]:
+    st.subheader("生成報到 QR Code")
+    public_base = st.text_input("公開網址（本頁網址）", value="", key="qr_public_url_input")
+    if public_base.endswith("/"):
+        public_base = public_base[:-1]
+    qr_title    = st.text_input("活動標題", value="迎新晚會", key="qr_title_input")
+    qr_category = st.selectbox("類別", list(points_map.keys()) or ["活動護持（含宿訪）"], key="qr_category_select")
+    qr_date     = st.date_input("活動日期", value=date.today(), key="qr_date_picker")
+
+    iso = qr_date.isoformat()
+    code = make_code(qr_title or qr_category, qr_category, iso, length=8)
+
+    # 更新/寫入 links（Google Sheet）
+    links_df = st.session_state.links
+    links_df = upsert_link(links_df, code=code, title=(qr_title or qr_category),
+                           category=qr_category, iso_date=iso)
+    st.session_state.links = links_df
+    save_links_to_sheet(sh, links_df)
+
+    # 短連結：使用 ?mode=checkin&c=CODE 並附 sid
+    sid = _parse_sheet_id(sheet_id_input)
+    sid_param_str = f"&sid={sid}" if sid else ""
+    short_url = f"{public_base}/?mode=checkin&c={code}{sid_param_str}"
+
+    st.write("**短連結（建議分享這個）**")
+    st.code(short_url, language="text")
+
+    # 產生 QR（用短連結）
+    if public_base:
+        img = qrcode.make(short_url)
+        buf = io.BytesIO(); img.save(buf, format="PNG")
+        st.image(buf.getvalue(), caption=f"掃描報到 ｜ 代碼：{code}", width=260)
+        st.download_button("⬇️ 下載 QR 圖片", data=buf.getvalue(),
+                           file_name=f"checkin_{code}.png",
+                           mime="image/png", key="qr_download_btn")
+    else:
+        st.info("請貼上你的 .streamlit.app 根網址（本頁網址）。")
+
+    with st.expander("🔎 目前所有短代碼一覽", expanded=False):
+        st.dataframe(links_df.sort_values("date", ascending=False), use_container_width=True, height=220)
+        st.download_button("⬇️ 下載連結代碼 CSV（匯出）",
+                           data=links_df.to_csv(index=False, encoding="utf-8-sig"),
+                           file_name="links.csv", mime="text/csv",
+                           key="links_download_btn")
+    # 清空 links
+    if st.button("🧹 清空所有短代碼（links）", key="links_clear_btn"):
+        st.session_state.links = st.session_state.links.iloc[0:0]
+        save_links_to_sheet(sh, st.session_state.links)
+        st.success("已清空所有短代碼。")
+
+# -------- 1) 現場報到 --------
+with tabs[1]:
+    st.subheader("現場快速報到")
+    on_title    = st.text_input("活動標題", value="未命名活動", key="on_title_input")
+    on_category = st.selectbox("類別", list(points_map.keys()) or ["活動護持（含宿訪）"], key="on_category_select")
+    on_date     = st.date_input("日期", value=date.today(), key="on_date_picker")
+    st.markdown(
+        """
+        <div style="color:#d32f2f; font-weight:700;">
+          請務必輸入全名（例：陳曉瑩）
+        </div>
+        <div style="color:#000;">
+          （可一次多人報到，用「、」「，」或空白分隔）
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    names_input = st.text_area("姓名清單", placeholder="例如：陳曉瑩、蕭雅云，張詠禎 徐睿妤",
+                               key="on_names_area", label_visibility="collapsed")
+    if st.button("➕ 加入報到名單", key="on_add_btn"):
+        ev = st.session_state.events.copy()
+        target_date = on_date.isoformat()
+        names = normalize_names(names_input)
+        if not names:
+            st.warning("請至少輸入一位姓名。")
+        else:
+            existing = set(
+                ev.loc[
+                    (ev["date"] == target_date) &
+                    (ev["title"] == on_title) &
+                    (ev["category"] == on_category),
+                    "participant"
+                ].astype(str).tolist()
+            )
+            to_add, skipped = [], []
+            for n in names:
+                if n in existing:
+                    skipped.append(n)
+                else:
+                    to_add.append({"date": target_date, "title": on_title,
+                                   "category": on_category, "participant": n})
+                    existing.add(n)
+            if to_add:
+                ev = pd.concat([ev, pd.DataFrame(to_add)], ignore_index=True)
+                st.session_state.events = ev
+                save_events_to_sheet(sh, ev)
+                st.success(f"已加入 {len(to_add)} 人：{'、'.join([r['participant'] for r in to_add])}")
+            if skipped:
+                st.warning(f"已跳過（重複）：{'、'.join(skipped)}")
+
+# -------- 2) 依日期查看參與者 --------
+with tabs[2]:
+    st.subheader("依日期查看參與者")
+    if st.session_state.events.empty:
+        st.info("目前尚無活動紀錄。")
+    else:
+        sel_date = st.date_input("選擇日期", value=date.today(), key="bydate_date_picker")
+        sel_date_str = sel_date.isoformat()
+        day_df = st.session_state.events[st.session_state.events["date"].astype(str) == sel_date_str].copy()
+        if day_df.empty:
+            st.info(f"{sel_date_str} 沒有任何紀錄。")
+        else:
+            cat_options = sorted(day_df["category"].astype(str).unique())
+            sel_cats = st.multiselect("篩選類別（可多選）",
+                                      options=cat_options, default=cat_options,
+                                      key="bydate_cats_multiselect")
+            show_df = day_df[day_df["category"].isin(sel_cats)].copy()
+            names = sorted(show_df["participant"].astype(str).unique())
+            st.write(f"**共 {len(names)} 人**：", "、".join(names) if names else "（無）")
+            st.dataframe(show_df[["participant","title","category"]]
+                         .sort_values(["category","participant"]),
+                         use_container_width=True, height=300)
+            st.download_button("⬇️ 下載當日明細 CSV（匯出）",
+                               data=show_df.to_csv(index=False, encoding="utf-8-sig"),
+                               file_name=f"events_{sel_date_str}.csv", mime="text/csv",
+                               key="bydate_download_btn")
+
+# -------- 3) 個人明細 --------
+with tabs[3]:
+    st.subheader("個人參加明細")
+    if st.session_state.events.empty:
+        st.info("目前尚無活動紀錄。")
+    else:
+        c1, c2 = st.columns(2)
+        with c1:
+            person = st.selectbox("選擇參加者",
+                                  sorted(st.session_state.events["participant"].unique()),
+                                  key="detail_person_select")
+        with c2:
+            only_cat = st.multiselect("篩選類別（可多選）",
+                                      options=sorted(st.session_state.events["category"].unique()),
+                                      default=None, key="detail_cats_multiselect")
+        dfp = st.session_state.events.query("participant == @person").copy()
+        if only_cat:
+            dfp = dfp[dfp["category"].isin(only_cat)]
+        st.dataframe(dfp[["date","title","category"]].sort_values("date"),
+                     use_container_width=True, height=350)
+        st.download_button("⬇️ 下載此人明細 CSV（匯出）",
+                           data=dfp.to_csv(index=False, encoding="utf-8-sig"),
+                           file_name=f"{person}_records.csv", mime="text/csv",
+                           key="detail_download_btn")
+
+# -------- 4) 完整記錄 --------
+with tabs[4]:
+    st.subheader("完整記錄（可編輯）")
+    st.caption("欄位：date, title, category, participant")
+    edited = st.data_editor(st.session_state.events, num_rows="dynamic",
+                            use_container_width=True, key="full_editor_table")
+    st.session_state.events = edited
+    save_events_to_sheet(sh, edited)
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.download_button("⬇️ 下載 CSV（匯出）",
+                           data=edited.to_csv(index=False, encoding="utf-8-sig"),
+                           file_name="events_export.csv", mime="text/csv",
+                           key="full_download_btn")
+    with c2:
+        if st.button("🗄️ 歸檔並清空（建立新工作表備份）", key="full_archive_btn"):
+            backup_title = f"events_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            ws_backup = get_or_create_ws(sh, backup_title, ["date","title","category","participant"])
+            df_to_ws(ws_backup, edited, ["date","title","category","participant"])
+            st.session_state.events = edited.iloc[0:0]
+            save_events_to_sheet(sh, st.session_state.events)
+            st.success(f"已備份到工作表：{backup_title} 並清空。")
+    with c3:
+        if st.button("♻️ 只清空（不備份）", key="full_clear_btn"):
+            st.session_state.events = edited.iloc[0:0]
+            save_events_to_sheet(sh, st.session_state.events)
+            st.success("已清空所有資料（未備份）。")
+
+# -------- 5) 排行榜 --------
+with tabs[5]:
+    st.subheader("排行榜（依總點數）")
+    summary = aggregate(st.session_state.events, points_map, rewards)
+    st.dataframe(summary, use_container_width=True, height=520)
