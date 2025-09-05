@@ -409,8 +409,7 @@ with tabs[0]:
     save_links_to_sheet(sh, links_df)
 
     # ✅ 短連結：使用固定的 sheet，不需 sid
-    short_url = f"{public_base}/?mode=checkin&c={code}
-
+    short_url = f"{public_base}/?mode=checkin&c={code}"
     st.write("**短連結（建議分享這個）**")
     st.code(short_url, language="text")
 
