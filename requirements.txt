@@ -1,7 +1,6 @@
-streamlit
-pandas
-qrcode
-pillow
-gspread
-google-auth
-gspread-dataframe
+streamlit>=1.32
+gspread==5.12.4
+google-auth==2.29.0
+pandas>=2.2
+qrcode[pil]==7.4.2
+pillow>=10.3
