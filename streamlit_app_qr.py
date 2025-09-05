@@ -23,6 +23,30 @@ def _get_gspread_client():
     info = st.secrets["gcp_service_account"]
     if isinstance(info, str):
         info = json.loads(info)
+
+    # ---- 私鑰健檢與自動修正 ----
+    pk = info.get("private_key", "")
+    if not isinstance(pk, str) or "BEGIN PRIVATE KEY" not in pk:
+        raise RuntimeError("secrets 裡的 gcp_service_account.private_key 看起來不對，請確認有 BEGIN/END 標頭")
+
+    # case A: 使用者用 JSON 形式貼進 TOML，會變成字面上的 '\n'
+    if "\\n" in pk and "\n" not in pk:
+        pk = pk.replace("\\n", "\n")
+
+    # 去除頭尾空白/空行
+    pk = pk.strip()
+
+    # 確保首尾標頭正確且各自獨立一行
+    if not pk.startswith("-----BEGIN PRIVATE KEY-----"):
+        pk = "-----BEGIN PRIVATE KEY-----\n" + pk.split("-----BEGIN PRIVATE KEY-----")[-1].lstrip()
+    if not pk.endswith("-----END PRIVATE KEY-----"):
+        pk = pk.split("-----END PRIVATE KEY-----")[0].rstrip() + "\n-----END PRIVATE KEY-----"
+
+    # 寫回 info
+    info = dict(info)
+    info["private_key"] = pk
+    # ---- 私鑰健檢與自動修正 END ----
+
     creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     return gspread.authorize(creds)
 
