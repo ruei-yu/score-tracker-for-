@@ -1,33 +1,32 @@
+# --- 頁面設定 ---
 import streamlit as st
+st.set_page_config(page_title="護持活動集點(for幹部)", page_icon="🔢", layout="wide")
+
 import pandas as pd
 import json, io, hashlib, re
 from datetime import date, datetime
 from urllib.parse import quote, unquote
 import qrcode
 
-# --- 頁面設定（建議放最上面） ---
-st.set_page_config(
-    page_title="護持活動集點(for幹部)",
-    page_icon="🔢",
-    layout="wide",
-)
-
 # ================= Google Sheet Helpers =================
 from google.oauth2.service_account import Credentials
 import gspread
 from gspread.exceptions import WorksheetNotFound
 
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
-          "https://www.googleapis.com/auth/drive"]
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
 
 def _get_gspread_client():
-    # ✅ 從 secrets 讀 gcp_service_account
-    creds = Credentials.from_service_account_info(
-        dict(st.secrets["gcp_service_account"]), scopes=SCOPES
-    )
+    # 支援 dict 或 JSON 字串（兩種 secrets 寫法都 OK）
+    info = st.secrets["gcp_service_account"]
+    if isinstance(info, str):
+        info = json.loads(info)
+    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     return gspread.authorize(creds)
 
-# === 固定使用這一份 Google Sheet（從 secrets 讀取） ===
+# 固定用 secrets 裡的 sheet_id
 FIXED_SHEET_ID = st.secrets["google_sheets"]["sheet_id"]
 
 @st.cache_resource(show_spinner=False)
@@ -35,7 +34,52 @@ def open_spreadsheet_by_fixed_id():
     client = _get_gspread_client()
     return client.open_by_key(FIXED_SHEET_ID)
 
-# ✅ 一開始就打開固定的 spreadsheet（只保留一次）
+def get_or_create_ws(sh, title: str, headers: list[str]):
+    try:
+        ws = sh.worksheet(title)
+        values = ws.get_all_values()
+        if not values:
+            ws.update([headers])
+        else:
+            ex_header = [h.strip() for h in values[0]]
+            for col in headers:
+                if col not in ex_header:
+                    ex_header.append(col)
+            if ex_header != values[0]:
+                ws.update([ex_header] + values[1:])
+        return ws
+    except WorksheetNotFound:
+        ws = sh.add_worksheet(title=title, rows=1000, cols=max(10, len(headers)))
+        ws.update([headers])
+        return ws
+
+def ws_to_df(ws, expected_cols: list[str]) -> pd.DataFrame:
+    values = ws.get_all_values()
+    if not values:
+        ws.update([expected_cols])
+        return pd.DataFrame(columns=expected_cols)
+    header = values[0]
+    data = values[1:]
+    df = pd.DataFrame(data, columns=header) if data else pd.DataFrame(columns=header)
+    for c in expected_cols:
+        if c not in df.columns:
+            df[c] = ""
+    return df[expected_cols]
+
+def df_to_ws(ws, df: pd.DataFrame, expected_cols: list[str]):
+    if df is None:
+        ws.clear()
+        ws.update([expected_cols])
+        return
+    for c in expected_cols:
+        if c not in df.columns:
+            df[c] = ""
+    df = df[expected_cols].copy()
+    data = [expected_cols] + df.astype(str).values.tolist()
+    ws.clear()
+    ws.update(data)
+
+# 開啟固定 spreadsheet（這裡只呼叫一次）
 sh = open_spreadsheet_by_fixed_id()
 
 # ================= Google Sheet Helpers =================
