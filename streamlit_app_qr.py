@@ -7,6 +7,8 @@ import json, io, hashlib, re
 from datetime import date, datetime
 from urllib.parse import quote, unquote
 import qrcode
+from gspread.exceptions import WorksheetNotFound, APIError
+import time, random
 
 # ================= Google Sheet Helpers =================
 from google.oauth2.service_account import Credentials
@@ -60,22 +62,39 @@ def open_spreadsheet_by_fixed_id():
 
 def get_or_create_ws(sh, title: str, headers: list[str]):
     try:
-        ws = sh.worksheet(title)
-        values = ws.get_all_values()
-        if not values:
-            ws.update([headers])
-        else:
-            ex_header = [h.strip() for h in values[0]]
-            for col in headers:
-                if col not in ex_header:
-                    ex_header.append(col)
-            if ex_header != values[0]:
-                ws.update([ex_header] + values[1:])
-        return ws
+        # 先嘗試抓到既有分頁
+        ws = _with_retry(sh.worksheet, title)
     except WorksheetNotFound:
-        ws = sh.add_worksheet(title=title, rows=1000, cols=max(10, len(headers)))
-        ws.update([headers])
+        # 沒有就新建
+        try:
+            ws = _with_retry(sh.add_worksheet, title=title, rows=1000, cols=max(10, len(headers)))
+            _with_retry(ws.update, [headers])
+            return ws
+        except APIError as e:
+            st.error(f"無法建立工作表「{title}」。{_explain_api_error(e)}")
+            st.stop()
+    except APIError as e:
+        st.error(f"讀取工作表「{title}」失敗。{_explain_api_error(e)}")
+        st.stop()
+
+    # 確保表頭齊全
+    try:
+        values = _with_retry(ws.get_all_values)
+        if not values:
+            _with_retry(ws.update, [headers])
+            return ws
+        ex_header = [h.strip() for h in values[0]]
+        changed = False
+        for col in headers:
+            if col not in ex_header:
+                ex_header.append(col)
+                changed = True
+        if changed:
+            _with_retry(ws.update, [ex_header] + values[1:])
         return ws
+    except APIError as e:
+        st.error(f"更新工作表「{title}」表頭失敗。{_explain_api_error(e)}")
+        st.stop()
 
 def ws_to_df(ws, expected_cols: list[str]) -> pd.DataFrame:
     values = ws.get_all_values()
@@ -105,6 +124,29 @@ def df_to_ws(ws, df: pd.DataFrame, expected_cols: list[str]):
 
 # ✅ 只呼叫一次
 sh = open_spreadsheet_by_fixed_id()
+
+def _explain_api_error(e: APIError) -> str:
+    try:
+        status = e.response.status_code
+        try:
+            body = e.response.json()
+        except Exception:
+            body = e.response.text
+        return f"status={status}, detail={body}"
+    except Exception:
+        return str(e)
+
+def _with_retry(func, *args, **kwargs):
+    # 專治 429/5xx 暫時性錯誤
+    for i in range(5):  # 0,1,2,3,4 共 5 次
+        try:
+            return func(*args, **kwargs)
+        except APIError as e:
+            code = getattr(getattr(e, "response", None), "status_code", None)
+            if code in (429, 500, 502, 503, 504):
+                time.sleep((1.2 ** i) + random.random() * 0.3)
+                continue
+            raise
 
 
 # ================= Domain Helpers（你原本的） =================
