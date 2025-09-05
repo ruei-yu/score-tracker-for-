@@ -423,11 +423,6 @@ tabs = st.tabs([
 with tabs[0]:
     from utils_safe_url import show_safe_link_box
 
-    # 假設這裡生成報到網址
-    checkin_url = f"https://{st.secrets['domain']}.streamlit.app/?mode=checkin&c=abc123"
-
-    # 在頁面顯示安全格式
-    show_safe_link_box(checkin_url, title="活動報到網址")
     st.subheader("生成報到 QR Code")
     public_base = st.text_input("公開網址（本頁網址）", value="", key="qr_public_url_input")
     if public_base.endswith("/"):
@@ -446,19 +441,24 @@ with tabs[0]:
     st.session_state.links = links_df
     save_links_to_sheet(sh, links_df)
 
-    # ✅ 短連結：使用固定的 sheet，不需 sid
+    # ✅ 短連結（真正要分享的連結）
     short_url = f"{public_base}/?mode=checkin&c={code}"
+
     st.write("**短連結（建議分享這個）**")
     st.code(short_url, language="text")
 
-    # 產生 QR（用短連結）
+    # 👉 用「安全網址格式」展示（含可點連結 / 純文字 / Slack/Discord / Markdown / QR）
     if public_base:
+        show_safe_link_box(short_url, title="分享報到短連結（安全格式）")
+
+        # 另外提供 QR 檔案下載
         img = qrcode.make(short_url)
         buf = io.BytesIO(); img.save(buf, format="PNG")
-        st.image(buf.getvalue(), caption=f"掃描報到 ｜ 代碼：{code}", width=260)
-        st.download_button("⬇️ 下載 QR 圖片", data=buf.getvalue(),
+        st.download_button("⬇️ 下載 QR 圖片",
+                           data=buf.getvalue(),
                            file_name=f"checkin_{code}.png",
-                           mime="image/png", key="qr_download_btn")
+                           mime="image/png",
+                           key="qr_download_btn")
     else:
         st.info("請貼上你的 .streamlit.app 根網址（本頁網址）。")
 
@@ -468,7 +468,7 @@ with tabs[0]:
                            data=links_df.to_csv(index=False, encoding="utf-8-sig"),
                            file_name="links.csv", mime="text/csv",
                            key="links_download_btn")
-    # 清空 links
+
     if st.button("🧹 清空所有短代碼（links）", key="links_clear_btn"):
         st.session_state.links = st.session_state.links.iloc[0:0]
         save_links_to_sheet(sh, st.session_state.links)
