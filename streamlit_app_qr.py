@@ -325,8 +325,9 @@ st.title("🔢護持活動集點(for幹部)")
 
 # Sidebar settings（用 Google Sheet 而不是檔案路徑）
 st.sidebar.title("⚙️ 設定（Google Sheet）")
-st.sidebar.success("已綁定到這份試算表：\n" +
-                   "https://docs.google.com/spreadsheets/d/1-KtuF0EFwALa3SWZM41Cljr7delspVSWKp0ECp_toT8")
+st.sidebar.success(
+    f"已綁定試算表：{st.secrets['google_sheets']['sheet_id']}"
+)
 
 
 # 載入設定 / 資料
