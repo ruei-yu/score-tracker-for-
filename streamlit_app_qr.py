@@ -5,10 +5,17 @@ from datetime import date, datetime
 from urllib.parse import quote, unquote
 import qrcode
 
-# === New: Google Sheets ===
-import gspread
-from google.oauth2.service_account import Credentials
-from gspread.exceptions import WorksheetNotFound
+# === 固定使用這一份 Google Sheet ===
+FIXED_SHEET_ID = "1-KtuF0EFwALa3SWZM41Cljr7delspVSWKp0ECp_toT8"  # 你的試算表 ID
+
+@st.cache_resource(show_spinner=False)
+def open_spreadsheet_by_fixed_id():
+    client = _get_gspread_client()
+    return client.open_by_key(FIXED_SHEET_ID)
+
+# 啟動時就打開固定的 spreadsheet
+sh = open_spreadsheet_by_fixed_id()
+
 
 # --- 頁面設定 ---
 st.set_page_config(
@@ -226,12 +233,15 @@ if sheet_id_boot:
 if mode == "checkin":
     st.markdown("### ✅ 線上報到")
 
+    # sh 來自 open_spreadsheet_by_fixed_id()，固定你的那份 sheet
     if not sh:
-        st.error("找不到 Google Sheet。請在短連結上加上 &sid=你的SheetID，或在部署環境設定 SHEET_ID。")
+        st.error("找不到 Google Sheet。")
         st.stop()
 
     events_df = load_events_from_sheet(sh)
     links_df  = load_links_from_sheet(sh)
+    ...
+
 
     # 取得活動資訊：優先用 c 代碼查 links；若沒有 c 才嘗試舊的 event JSON
     title, category, target_date = "未命名活動", "活動護持（含宿訪）", date.today().isoformat()
@@ -315,24 +325,9 @@ st.title("🔢護持活動集點(for幹部)")
 
 # Sidebar settings（用 Google Sheet 而不是檔案路徑）
 st.sidebar.title("⚙️ 設定（Google Sheet）")
-sheet_id_input = st.sidebar.text_input(
-    "Google Sheet 網址或 ID",
-    value=sheet_id_boot,
-    help="建議先在 Google Drive 建好試算表並分享給服務帳號；可貼整個網址或只貼中間的 ID。"
-)
+st.sidebar.success("已綁定到這份試算表：\n" +
+                   "https://docs.google.com/spreadsheets/d/1-KtuF0EFwALa3SWZM41Cljr7delspVSWKp0ECp_toT8")
 
-if sheet_id_input:
-    try:
-        sh = open_spreadsheet(_parse_sheet_id(sheet_id_input))
-    except Exception as e:
-        st.sidebar.error("無法開啟此試算表，請確認 ID/網址與權限。")
-        sh = None
-else:
-    if not sh:
-        st.info("請先在左側貼上 Google Sheet 網址或 ID，或在 secrets 設定 SHEET_ID。")
-
-if not sh:
-    st.stop()
 
 # 載入設定 / 資料
 if "config" not in st.session_state:
@@ -416,10 +411,10 @@ with tabs[0]:
     st.session_state.links = links_df
     save_links_to_sheet(sh, links_df)
 
-    # 短連結：使用 ?mode=checkin&c=CODE 並附 sid
-    sid = _parse_sheet_id(sheet_id_input)
-    sid_param_str = f"&sid={sid}" if sid else ""
-    short_url = f"{public_base}/?mode=checkin&c={code}{sid_param_str}"
+    # ✅ 短連結：使用固定的 sheet，不需 sid
+    short_url = f"{public_base}/?mode=checkin&c={code}"
+    st.write("**短連結（建議分享這個）**")
+    st.code(short_url, language="text")
 
     st.write("**短連結（建議分享這個）**")
     st.code(short_url, language="text")
