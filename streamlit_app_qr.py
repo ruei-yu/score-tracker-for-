@@ -8,6 +8,52 @@ from datetime import date, datetime
 from urllib.parse import quote, unquote
 import qrcode
 import time, random
+# ==== utils_safe_url (inline, LINE 友善) ====
+import io, qrcode
+from urllib.parse import urlsplit, urlunsplit, quote, quote_plus
+
+def _sanitize_url(url: str) -> str:
+    u = (url or "").strip()
+    if not u:
+        return ""
+    parts = urlsplit(u if "://" in u else "https://" + u)
+    scheme = parts.scheme or "https"
+    netloc = parts.netloc or parts.path
+    path = quote(parts.path or "", safe="/-._~")
+    if parts.query:
+        pairs = []
+        for p in parts.query.split("&"):
+            if "=" in p:
+                k, v = p.split("=", 1)
+                pairs.append(f"{quote_plus(k)}={quote_plus(v)}")
+            else:
+                pairs.append(quote_plus(p))
+        query = "&".join(pairs)
+    else:
+        query = ""
+    fragment = quote(parts.fragment or "", safe="-._~")
+    return urlunsplit((scheme, netloc, path, query, fragment))
+
+def build_checkin_url(public_base: str, code: str) -> str:
+    base = (public_base or "").strip()
+    if base.endswith("/"):
+        base = base[:-1]
+    return _sanitize_url(f"{base}/?mode=checkin&c={quote_plus(str(code))}")
+
+def show_safe_link_box(url: str, title: str = "分享報到短連結（LINE 友善）"):
+    import streamlit as st
+    safe = _sanitize_url(url)
+    st.subheader(title)
+    st.markdown(
+        f'<a href="{safe}" target="_blank" rel="noopener noreferrer" style="font-size:18px;">點我前往報到</a>',
+        unsafe_allow_html=True,
+    )
+    st.caption("LINE 請直接複製這段給大家（單獨一行，不要加文字或符號）")
+    st.code(safe, language="text")
+    img = qrcode.make(safe)
+    buf = io.BytesIO(); img.save(buf, format="PNG")
+    st.image(buf.getvalue(), caption="掃碼報到", use_column_width=False)
+# ==== end utils_safe_url ====
 
 # ================= Google Sheet Helpers =================
 from google.oauth2.service_account import Credentials
@@ -430,7 +476,7 @@ tabs = st.tabs([
 
 # -------- 0) 產生 QRcode（含短代碼） -------
 with tabs[0]:
-    from utils_safe_url import build_checkin_url, show_safe_link_box
+
     st.subheader("生成報到 QR Code")
     public_base = st.text_input("公開網址（本頁網址）", value="", key="qr_public_url_input")
     if public_base.endswith("/"):
