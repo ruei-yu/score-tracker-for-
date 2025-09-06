@@ -475,11 +475,10 @@ tabs = st.tabs([
 ])
 
 # -------- 0) 產生 QRcode（含短代碼） -------
+# -------- 0) 產生 QRcode（含短代碼） -------
 with tabs[0]:
-    # 若沒採用「內嵌」方案，保留這行；用了內嵌就刪掉這行
-    from utils_safe_url import build_checkin_url, show_safe_link_box
-
     st.subheader("生成報到 QR Code")
+
     public_base = st.text_input("公開網址（本頁網址）", value="", key="qr_public_url_input").rstrip("/")
 
     qr_title    = st.text_input("活動標題", value="迎新晚會", key="qr_title_input")
@@ -489,19 +488,28 @@ with tabs[0]:
     iso = qr_date.isoformat()
     code = make_code(qr_title or qr_category, qr_category, iso, length=8)
 
+    # 更新/寫入 links（Google Sheet）
     links_df = st.session_state.links
     links_df = upsert_link(links_df, code=code, title=(qr_title or qr_category),
                            category=qr_category, iso_date=iso)
     st.session_state.links = links_df
     save_links_to_sheet(sh, links_df)
 
+    # ✅ 使用「內嵌」的函式產生 LINE 友善短連結
     short_url = build_checkin_url(public_base, code)
 
     if public_base:
+        # 只顯示一個最佳網址（可點連結 + 純文字 + QR Code）
         show_safe_link_box(short_url)
-        img = qrcode.make(short_url); buf = io.BytesIO(); img.save(buf, format="PNG")
-        st.download_button("⬇️ 下載 QR 圖片", data=buf.getvalue(),
-                           file_name=f"checkin_{code}.png", mime="image/png", key="qr_download_btn")
+
+        # 提供 QR 圖檔下載
+        img = qrcode.make(short_url)
+        buf = io.BytesIO(); img.save(buf, format="PNG")
+        st.download_button("⬇️ 下載 QR 圖片",
+                           data=buf.getvalue(),
+                           file_name=f"checkin_{code}.png",
+                           mime="image/png",
+                           key="qr_download_btn")
     else:
         st.info("請貼上你的 .streamlit.app 根網址（本頁網址）。")
 
@@ -509,13 +517,13 @@ with tabs[0]:
         st.dataframe(links_df.sort_values("date", ascending=False), use_container_width=True, height=220)
         st.download_button("⬇️ 下載連結代碼 CSV（匯出）",
                            data=links_df.to_csv(index=False, encoding="utf-8-sig"),
-                           file_name="links.csv", mime="text/csv", key="links_download_btn")
+                           file_name="links.csv", mime="text/csv",
+                           key="links_download_btn")
 
     if st.button("🧹 清空所有短代碼（links）", key="links_clear_btn"):
         st.session_state.links = st.session_state.links.iloc[0:0]
         save_links_to_sheet(sh, st.session_state.links)
         st.success("已清空所有短代碼。")
-        
         
 # -------- 1) 現場報到 --------
 with tabs[1]:
