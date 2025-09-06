@@ -88,6 +88,28 @@ def get_or_create_ws(sh, title: str, headers: list[str]):
         st.error(f"讀取工作表「{title}」失敗。{_explain_api_error(e)}")
         st.stop()
 
+    # ⬇️ 加這段保護
+    if ws is None:
+        st.error(f"取得工作表「{title}」失敗（ws=None）。請檢查 sheet_id/權限。")
+        st.stop()
+
+    try:
+        values = _with_retry(ws.get_all_values)
+        if not values:
+            _with_retry(ws.update, [headers])
+            return ws
+        ex_header = [h.strip() for h in values[0]]
+        changed = False
+        for col in headers:
+            if col not in ex_header:
+                ex_header.append(col); changed = True
+        if changed:
+            _with_retry(ws.update, [ex_header] + values[1:])
+        return ws
+    except APIError as e:
+        st.error(f"更新工作表「{title}」表頭失敗。{_explain_api_error(e)}")
+        st.stop()
+
     # 確保表頭齊全
     try:
         values = _with_retry(ws.get_all_values)
@@ -408,7 +430,7 @@ tabs = st.tabs([
 
 # -------- 0) 產生 QRcode（含短代碼） -------
 with tabs[0]:
-    from utils_safe_url.py import build_checkin_url, show_safe_link_box
+    from utils_safe_url import build_checkin_url, show_safe_link_box
     st.subheader("生成報到 QR Code")
     public_base = st.text_input("公開網址（本頁網址）", value="", key="qr_public_url_input")
     if public_base.endswith("/"):
