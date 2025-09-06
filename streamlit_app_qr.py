@@ -407,13 +407,15 @@ tabs = st.tabs([
 ])
 
 # -------- 0) 產生 QRcode（含短代碼） --------
+# -------- 0) 產生 QRcode（含短代碼） --------
 with tabs[0]:
-    from utils_safe_url import show_safe_link_box
+    from utils_safe_url import build_checkin_url, show_safe_link_box
 
     st.subheader("生成報到 QR Code")
     public_base = st.text_input("公開網址（本頁網址）", value="", key="qr_public_url_input")
     if public_base.endswith("/"):
         public_base = public_base[:-1]
+
     qr_title    = st.text_input("活動標題", value="迎新晚會", key="qr_title_input")
     qr_category = st.selectbox("類別", list(points_map.keys()) or ["活動護持（含宿訪）"], key="qr_category_select")
     qr_date     = st.date_input("活動日期", value=date.today(), key="qr_date_picker")
@@ -428,12 +430,14 @@ with tabs[0]:
     st.session_state.links = links_df
     save_links_to_sheet(sh, links_df)
 
-    short_url = f"{public_base}/?mode=checkin&c={code}"
-    st.write("**短連結（建議分享這個）**")
-    st.code(short_url, language="text")
+    # ✅ 產生 LINE 友善短連結
+    short_url = build_checkin_url(public_base, code)
 
     if public_base:
-        show_safe_link_box(short_url, title="分享報到短連結（安全格式）")
+        # 👉 只顯示一個最佳網址（可點連結 + 純文字 + QR Code）
+        show_safe_link_box(short_url)
+
+        # 提供 QR 圖檔下載
         img = qrcode.make(short_url)
         buf = io.BytesIO(); img.save(buf, format="PNG")
         st.download_button("⬇️ 下載 QR 圖片",
@@ -455,7 +459,8 @@ with tabs[0]:
         st.session_state.links = st.session_state.links.iloc[0:0]
         save_links_to_sheet(sh, st.session_state.links)
         st.success("已清空所有短代碼。")
-
+        
+        
 # -------- 1) 現場報到 --------
 with tabs[1]:
     st.subheader("現場快速報到")
