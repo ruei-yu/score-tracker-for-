@@ -406,11 +406,9 @@ tabs = st.tabs([
     "🏆 排行榜",
 ])
 
-# -------- 0) 產生 QRcode（含短代碼） --------
-# -------- 0) 產生 QRcode（含短代碼） --------
+# -------- 0) 產生 QRcode（含短代碼） -------
 with tabs[0]:
     from utils_safe_url import build_checkin_url, show_safe_link_box
-
     st.subheader("生成報到 QR Code")
     public_base = st.text_input("公開網址（本頁網址）", value="", key="qr_public_url_input")
     if public_base.endswith("/"):
