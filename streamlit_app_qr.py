@@ -804,9 +804,7 @@ with tabs[4]:
             mime="text/csv",
             key="full_download_btn",
         )
-
-
-        with c2:
+    with c2:
         st.markdown("**🗄️ 歸檔並清空（建立新工作表備份）**")
         if st.button("執行歸檔並清空", key="full_archive_btn"):
             flag = "auth_archive_clear"
@@ -827,22 +825,23 @@ with tabs[4]:
             st.session_state[flag] = False
             st.success(f"✅ 已備份到工作表：{backup_title} 並清空。")
 
-        with c3:
-            st.markdown("**♻️ 只清空（不備份）**")
-            if st.button("執行只清空", key="full_clear_btn"):
-                flag = "auth_clear_only"
-                st.session_state[flag] = st.session_state.get(flag, False)
-                if not st.session_state[flag]:
-                    if HAVE_DIALOG:
-                        ask_password_dialog(flag, "清空資料需要管理密碼")
-                        st.stop()
-                    else:
-                        st.warning("目前環境不支援對話框，請先在下方輸入管理密碼，再按一次。")
-                        st.stop()
-                st.session_state.events = st.session_state.events.iloc[0:0]
-                save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
-                st.session_state[flag] = False
-                st.success("✅ 已清空所有資料（未備份）。")
+    with c3:
+        st.markdown("**♻️ 只清空（不備份）**")
+        if st.button("執行只清空", key="full_clear_btn"):
+            flag = "auth_clear_only"
+            st.session_state[flag] = st.session_state.get(flag, False)
+            if not st.session_state[flag]:
+                if HAVE_DIALOG:
+                    ask_password_dialog(flag, "清空資料需要管理密碼")
+                    st.stop()
+                else:
+                    st.warning("目前環境不支援對話框，請先在下方輸入管理密碼，再按一次。")
+                    st.stop()
+            st.session_state.events = st.session_state.events.iloc[0:0]
+            save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
+            st.session_state[flag] = False
+            st.success("✅ 已清空所有資料（未備份）。")
+
 
 
 # -------- 5) 排行榜 --------
