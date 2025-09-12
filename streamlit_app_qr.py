@@ -1,7 +1,7 @@
 # --- 頁面設定 ---
 import streamlit as st
 st.set_page_config(page_title="護持活動集點(for幹部)", page_icon="🔢", layout="wide")
-
+import requests
 import pandas as pd
 import json, io, hashlib, re
 from datetime import date, datetime
@@ -115,7 +115,7 @@ def _with_retry(func, *args, **kwargs):
         except APIError as e:
             code = getattr(getattr(e, "response", None), "status_code", None)
             if code in (429, 500, 502, 503, 504):
-                time.sleep((1.2 ** i) + random.random() * 0.3)
+                time.sleep((1.6 ** i) + random.random() * 0.4)  # 指數退避
                 continue
             raise
 
@@ -124,7 +124,7 @@ def get_or_create_ws(sh, title: str, headers: list[str]):
         ws = _with_retry(sh.worksheet, title)
     except WorksheetNotFound:
         try:
-            ws = _with_retry(sh.add_worksheet, title=title, rows=1000, cols=max(10, len(headers)))
+            ws = _with_retry(sh.add_worksheet, title=title, rows=2000, cols=max(10, len(headers)))
             _with_retry(ws.update, [headers])
             return ws
         except APIError as e:
@@ -134,29 +134,11 @@ def get_or_create_ws(sh, title: str, headers: list[str]):
         st.error(f"讀取工作表「{title}」失敗。{_explain_api_error(e)}")
         st.stop()
 
-    # ⬇️ 加這段保護
     if ws is None:
         st.error(f"取得工作表「{title}」失敗（ws=None）。請檢查 sheet_id/權限。")
         st.stop()
 
-    try:
-        values = _with_retry(ws.get_all_values)
-        if not values:
-            _with_retry(ws.update, [headers])
-            return ws
-        ex_header = [h.strip() for h in values[0]]
-        changed = False
-        for col in headers:
-            if col not in ex_header:
-                ex_header.append(col); changed = True
-        if changed:
-            _with_retry(ws.update, [ex_header] + values[1:])
-        return ws
-    except APIError as e:
-        st.error(f"更新工作表「{title}」表頭失敗。{_explain_api_error(e)}")
-        st.stop()
-
-    # 確保表頭齊全
+    # 確保表頭齊全（補缺欄）
     try:
         values = _with_retry(ws.get_all_values)
         if not values:
@@ -184,6 +166,7 @@ def ws_to_df(ws, expected_cols: list[str]) -> pd.DataFrame:
     for c in expected_cols:
         if c not in df.columns:
             df[c] = ""
+    # 僅回傳期望欄位的順序
     return df[expected_cols]
 
 def safe_write_ws(ws, df: pd.DataFrame, expected_cols: list[str], *, allow_clear: bool=False):
@@ -195,7 +178,6 @@ def safe_write_ws(ws, df: pd.DataFrame, expected_cols: list[str], *, allow_clear
             df[c] = ""
     df = df[expected_cols].copy()
 
-    # 預設不清空：空表就只補表頭、跳過寫回，避免覆蓋到雲端既有資料
     if df.empty and not allow_clear:
         vals = _with_retry(ws.get_all_values)
         if not vals:
@@ -210,13 +192,22 @@ def df_to_ws(ws, df: pd.DataFrame, expected_cols: list[str]):
     """保留給非 events 類表格（如設定/排行榜）覆蓋寫回使用。"""
     safe_write_ws(ws, df, expected_cols, allow_clear=True)
 
-def append_events_rows(sh, rows: list[dict]):
-    """報到資料：一律 append，避免覆蓋整表。"""
+# ---------- 新增：穩定寫入（append + 退避重試） ----------
+def safe_append(ws, rows: list[list], *, value_input_option: str = "RAW") -> bool:
+    """追加行，針對 429/5xx 自動退避重試。"""
     if not rows:
-        return
-    ws = get_or_create_ws(sh, "events", ["date","title","category","participant"])
-    payload = [[r["date"], r["title"], r["category"], r["participant"]] for r in rows]
-    _with_retry(ws.append_rows, payload, value_input_option="USER_ENTERED")
+        return True
+    for i in range(5):
+        try:
+            ws.append_rows(rows, value_input_option=value_input_option, table_range="A1")
+            return True
+        except APIError as e:
+            code = getattr(getattr(e, "response", None), "status_code", None)
+            if code in (429, 500, 502, 503, 504):
+                time.sleep((1.6 ** i) + random.random() * 0.4)
+                continue
+            raise
+    return False
 
 # ✅ 只呼叫一次
 sh = open_spreadsheet_by_fixed_id()
@@ -267,6 +258,11 @@ def make_code(title: str, category: str, iso_date: str, length: int = 8) -> str:
     h = hashlib.md5(base).hexdigest()
     return h[:length].upper()
 
+# ---------- 新增：冪等鍵（避免重複寫入） ----------
+def make_idempotency_key(name: str, title: str, category: str, iso_date: str) -> str:
+    raw = f"{iso_date}|{title}|{category}|{name}".strip()
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16].upper()
+
 def upsert_link(links_df: pd.DataFrame, code: str, title: str, category: str, iso_date: str) -> pd.DataFrame:
     links_df = links_df.copy()
     if "code" not in links_df.columns:
@@ -302,14 +298,17 @@ def save_config_to_sheet(sh, cfg):
     df_to_ws(ws_items, items, ["category","points"])
     df_to_ws(ws_rewards, rewards, ["threshold","reward"])
 
+# 事件記錄：我們讓表頭包含 idempotency_key
+EVENT_COLS = ["date","title","category","participant","idempotency_key"]
+
 def load_events_from_sheet(sh) -> pd.DataFrame:
-    ws = get_or_create_ws(sh, "events", ["date","title","category","participant"])
-    return ws_to_df(ws, ["date","title","category","participant"])
+    ws = get_or_create_ws(sh, "events", EVENT_COLS)
+    return ws_to_df(ws, EVENT_COLS)
 
 def save_events_to_sheet(sh, df: pd.DataFrame, *, allow_clear: bool=False):
-    """僅在需要覆蓋/清空時才用，平時報到請用 append_events_rows。"""
-    ws = get_or_create_ws(sh, "events", ["date","title","category","participant"])
-    safe_write_ws(ws, df, ["date","title","category","participant"], allow_clear=allow_clear)
+    """僅在需要覆蓋/清空時才用；平時報到用 append 安全寫入。"""
+    ws = get_or_create_ws(sh, "events", EVENT_COLS)
+    safe_write_ws(ws, df, EVENT_COLS, allow_clear=allow_clear)
 
 def load_links_from_sheet(sh) -> pd.DataFrame:
     ws = get_or_create_ws(sh, "links", ["code","title","category","date"])
@@ -318,6 +317,138 @@ def load_links_from_sheet(sh) -> pd.DataFrame:
 def save_links_to_sheet(sh, df: pd.DataFrame):
     ws = get_or_create_ws(sh, "links", ["code","title","category","date"])
     df_to_ws(ws, df, ["code","title","category","date"])
+
+# ---------- 新增：event_keys 索引（更快去重） ----------
+def load_event_keys_ws(sh):
+    return get_or_create_ws(sh, "event_keys", ["idempotency_key","date","title","category","participant"])
+
+@st.cache_data(ttl=120)
+def load_event_keyset(sh) -> set:
+    ws_keys = load_event_keys_ws(sh)
+    vals = _with_retry(ws_keys.get_all_values)
+    if not vals or len(vals) <= 1:
+        return set()
+    # 第一欄為 idempotency_key
+    return set([r[0] for r in vals[1:] if r and r[0]])
+
+def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *, max_retries: int = 5) -> str:
+    """
+    逐筆送到 Apps Script Web App。
+    期望 GAS 回傳 JSON：{"status":"OK|DUP|ERR", "message":"..."}
+    回傳：'OK'（成功）、'DUP'（重複）、'ERR'（失敗或逾時）
+    """
+    if not AS_URL:
+        return "ERR"
+
+    payload = {
+        "date": date_str,
+        "title": title,
+        "category": category,
+        "participant": name,
+        "idempotency_key": make_idempotency_key(name, title, category, date_str),
+    }
+
+    for i in range(max_retries):
+        try:
+            r = requests.post(AS_URL, json=payload, timeout=12)
+
+            # 優先解析 JSON
+            try:
+                data = r.json()
+                status = (data.get("status") or "").upper()
+                if status in ("OK", "DUP", "ERR"):
+                    return status
+            except Exception:
+                # 回退：用純文字內容判斷（相容你之前的字串回覆）
+                t = (r.text or "").strip().upper()
+                if t in ("OK", "DUP"):
+                    return t
+                if t.startswith("ERR"):
+                    return "ERR"
+
+        except Exception:
+            pass
+
+        # 退避重試
+        time.sleep(min(2 ** i, 8) + random.random() * 0.3)
+
+    return "ERR"
+
+
+   def append_events_rows(sh, rows: list[dict]):
+    """統一入口：優先用 API；沒有 API 時退回直接寫表（含冪等鍵與索引維護）"""
+    if not rows:
+        return {"added": [], "skipped": []}
+
+    # 若選 API 模式
+    if WRITE_MODE.startswith("透過後端") and AS_URL:
+        added, skipped = [], []
+        for r in rows:
+            d, t, c, p = r["date"], r["title"], r["category"], r["participant"]
+            res = send_checkin_via_api(d, t, c, p)
+            if res == "OK":
+                added.append(p)
+            elif res == "DUP":
+                skipped.append(p)
+            else:
+                st.warning(f"{p} 寫入失敗：{res}")
+        return {"added": added, "skipped": skipped}
+
+    # ── 否則走「直接寫表」的穩定版（本地去重 + 兩表附寫） ──
+    ws_events = get_or_create_ws(sh, "events", EVENT_COLS)
+    ws_keys   = load_event_keys_ws(sh)
+    keyset = load_event_keyset(sh)
+
+    evt_payload, key_payload = [], []
+    added, skipped = [], []
+    for r in rows:
+        d, t, c, p = r["date"], r["title"], r["category"], r["participant"]
+        k = make_idempotency_key(p, t, c, d)
+        if k in keyset:
+            skipped.append(p); continue
+        evt_payload.append([d, t, c, p, k])
+        key_payload.append([k, d, t, c, p])
+        keyset.add(k); added.append(p)
+
+    ok1 = safe_append(ws_events, evt_payload, value_input_option="USER_ENTERED") if evt_payload else True
+    ok2 = safe_append(ws_keys,   key_payload, value_input_option="USER_ENTERED") if key_payload else True
+    st.cache_data.clear()
+    if not (ok1 and ok2):
+        st.warning("部分寫入失敗，請稍後在『完整記錄』確認。")
+    return {"added": added, "skipped": skipped}
+
+    # 取現有 keyset（快取 120s）
+    keyset = load_event_keyset(sh)
+
+    # 建立 payload（去重）
+    evt_payload, key_payload = [], []
+    accepted_names, skipped_names = [], []
+
+    for r in rows:
+        d, t, c, p = r["date"], r["title"], r["category"], r["participant"]
+        key = make_idempotency_key(p, t, c, d)
+        if key in keyset:
+            skipped_names.append(p)
+            continue
+        evt_payload.append([d, t, c, p, key])
+        key_payload.append([key, d, t, c, p])
+        keyset.add(key)
+        accepted_names.append(p)
+
+    if not evt_payload:
+        return {"added": [], "skipped": skipped_names}
+
+    ok1 = safe_append(ws_events, evt_payload, value_input_option="USER_ENTERED")
+    ok2 = safe_append(ws_keys, key_payload, value_input_option="USER_ENTERED")
+
+    # 失敗時讓快取早點失效，避免短時間內誤判
+    st.cache_data.clear()
+
+    if not (ok1 and ok2):
+        # 局部失敗時提示，但保留已成功者
+        st.warning("部分寫入失敗，請稍後在『完整記錄』確認。")
+
+    return {"added": accepted_names, "skipped": skipped_names}
 
 # ================= Query Params / Sheet ID bootstrap =================
 qp = st.query_params
@@ -382,28 +513,13 @@ if mode == "checkin":
         if not names:
             st.error("請至少輸入一位姓名。")
         else:
-            existing = set(
-                events_df.loc[
-                    (events_df["date"] == target_date) &
-                    (events_df["title"] == title) &
-                    (events_df["category"] == category),
-                    "participant"
-                ].astype(str).tolist()
-            )
-            to_add, skipped = [], []
-            for n in names:
-                if n in existing:
-                    skipped.append(n)
-                else:
-                    to_add.append({"date": target_date, "title": title,
-                                   "category": category, "participant": n})
-                    existing.add(n)
-            if to_add:
-                append_events_rows(sh, to_add)
-                events_df = load_events_from_sheet(sh)
-                st.success(f"已報到 {len(to_add)} 人：{'、'.join([r['participant'] for r in to_add])}")
-            if skipped:
-                st.warning(f"以下人員已經報到過，已跳過：{'、'.join(skipped)}")
+            to_add = [{"date": target_date, "title": title, "category": category, "participant": n}
+                      for n in names]
+            result = append_events_rows(sh, to_add) or {"added": [], "skipped": []}
+            if result["added"]:
+                st.success(f"已報到 {len(result['added'])} 人：{'、'.join(result['added'])}")
+            if result["skipped"]:
+                st.warning(f"以下人員先前已報到，已跳過：{'、'.join(result['skipped'])}")
     st.stop()
 
 # ================= Admin UI =================
@@ -412,6 +528,37 @@ st.title("🔢護持活動集點(for幹部)")
 # Sidebar settings（用 Google Sheet 而不是檔案路徑）
 st.sidebar.title("⚙️ 設定（Google Sheet）")
 st.sidebar.success(f"已綁定試算表：{st.secrets['google_sheets']['sheet_id']}")
+
+# Sidebar settings（用 Google Sheet 而不是檔案路徑）
+st.sidebar.title("⚙️ 設定（Google Sheet）")
+st.sidebar.success(f"已綁定試算表：{st.secrets['google_sheets']['sheet_id']}")
+
+# ==== 寫入模式：API 或 直接寫 Sheet ====
+AS_URL = st.secrets.get("apps_script", {}).get("web_app_url", "").strip()
+use_api_default = bool(AS_URL)
+WRITE_MODE = st.sidebar.radio(
+    "寫入模式",
+    options=["透過後端 API（推薦）", "直接寫入 Google Sheet"],
+    index=0 if use_api_default else 1,
+    help="大量同秒報到時，建議用後端 API（Apps Script）避免撞限額。",
+    key="write_mode_radio",
+)
+
+def api_healthcheck() -> str:
+    if not AS_URL:
+        return "未設定 API URL"
+    try:
+        # Apps Script 沒做 GET 也沒關係，這裡僅測試可達性
+        r = requests.get(AS_URL, timeout=6)
+        return f"可連線（HTTP {r.status_code}）"
+    except Exception as e:
+        return f"不可連線：{e}"
+
+with st.sidebar.expander("🔌 後端 API 狀態", expanded=False):
+    st.write(f"API URL：{AS_URL or '（未設定）'}")
+    if st.button("測試連線", key="btn_api_ping"):
+        st.info(api_healthcheck())
+
 
 # 載入設定 / 資料
 if "config" not in st.session_state:
@@ -474,7 +621,6 @@ tabs = st.tabs([
     "🏆 排行榜",
 ])
 
-# -------- 0) 產生 QRcode（含短代碼） -------
 # -------- 0) 產生 QRcode（含短代碼） -------
 with tabs[0]:
     st.subheader("生成報到 QR Code")
@@ -546,29 +692,15 @@ with tabs[1]:
         if not names:
             st.warning("請至少輸入一位姓名。")
         else:
-            ev = st.session_state.events.copy()
-            existing = set(
-                ev.loc[
-                    (ev["date"] == target_date) &
-                    (ev["title"] == on_title) &
-                    (ev["category"] == on_category),
-                    "participant"
-                ].astype(str).tolist()
-            )
-            to_add, skipped = [], []
-            for n in names:
-                if n in existing:
-                    skipped.append(n)
-                else:
-                    to_add.append({"date": target_date, "title": on_title,
-                                   "category": on_category, "participant": n})
-                    existing.add(n)
-            if to_add:
-                append_events_rows(sh, to_add)
+            to_add = [{"date": target_date, "title": on_title, "category": on_category, "participant": n}
+                      for n in names]
+            result = append_events_rows(sh, to_add) or {"added": [], "skipped": []}
+            if result["added"]:
+                # 重新載入 events（保留 idempotency_key）
                 st.session_state.events = load_events_from_sheet(sh)
-                st.success(f"已加入 {len(to_add)} 人：{'、'.join([r['participant'] for r in to_add])}")
-            if skipped:
-                st.warning(f"已跳過（重複）：{'、'.join(skipped)}")
+                st.success(f"已加入 {len(result['added'])} 人：{'、'.join(result['added'])}")
+            if result["skipped"]:
+                st.warning(f"已跳過（先前已報到）：{'、'.join(result['skipped'])}")
 
 # -------- 2) 依日期查看參與者 --------
 with tabs[2]:
@@ -578,7 +710,8 @@ with tabs[2]:
     else:
         sel_date = st.date_input("選擇日期", value=date.today(), key="bydate_date_picker")
         sel_date_str = sel_date.isoformat()
-        day_df = st.session_state.events[st.session_state.events["date"].astype(str) == sel_date_str].copy()
+        # 顯示時只取前四欄（隱藏 id）
+        day_df = st.session_state.events[st.session_state.events["date"].astype(str) == sel_date_str][["date","title","category","participant"]].copy()
         if day_df.empty:
             st.info(f"{sel_date_str} 沒有任何紀錄。")
         else:
@@ -612,7 +745,7 @@ with tabs[3]:
             only_cat = st.multiselect("篩選類別（可多選）",
                                       options=sorted(st.session_state.events["category"].unique()),
                                       default=None, key="detail_cats_multiselect")
-        dfp = st.session_state.events.query("participant == @person").copy()
+        dfp = st.session_state.events.query("participant == @person")[["date","title","category","participant"]].copy()
         if only_cat:
             dfp = dfp[dfp["category"].isin(only_cat)]
         st.dataframe(dfp[["date","title","category"]].sort_values("date"),
@@ -625,16 +758,14 @@ with tabs[3]:
 # -------- 4) 完整記錄 --------
 with tabs[4]:
     st.subheader("完整記錄（可編輯）")
-    st.caption("欄位：date, title, category, participant")
+    st.caption("欄位：date, title, category, participant, idempotency_key（請勿修改 id 欄）")
 
     edited = st.data_editor(st.session_state.events, num_rows="dynamic",
                             use_container_width=True, key="full_editor_table")
 
-    # ✅ 只在非空時自動儲存；空表時避免覆蓋 Google Sheet
     if edited is not None and not edited.empty:
         st.session_state.events = edited
-        # 覆蓋寫回（此頁本來就要同步整表），但我們已在 safe_write_ws 內做保護
-        save_events_to_sheet(sh, edited)
+        save_events_to_sheet(sh, edited)  # 會一併保存 idempotency_key
     else:
         st.info("（安全保護）偵測到空表，已跳過寫回 Google Sheet，以避免意外清空。")
 
@@ -647,8 +778,8 @@ with tabs[4]:
     with c2:
         if st.button("🗄️ 歸檔並清空（建立新工作表備份）", key="full_archive_btn"):
             backup_title = f"events_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            ws_backup = get_or_create_ws(sh, backup_title, ["date","title","category","participant"])
-            df_to_ws(ws_backup, st.session_state.events, ["date","title","category","participant"])
+            ws_backup = get_or_create_ws(sh, backup_title, EVENT_COLS)
+            df_to_ws(ws_backup, st.session_state.events, EVENT_COLS)
             st.session_state.events = st.session_state.events.iloc[0:0]
             save_events_to_sheet(sh, st.session_state.events, allow_clear=True)  # ← 只有這裡允許清空
             st.success(f"已備份到工作表：{backup_title} 並清空。")
@@ -661,7 +792,9 @@ with tabs[4]:
 # -------- 5) 排行榜 --------
 with tabs[5]:
     st.subheader("排行榜（依總點數）")
-    summary = aggregate(st.session_state.events, points_map, rewards)
+    # 顯示時不需要 id 欄
+    ev4 = st.session_state.events[["date","title","category","participant"]].copy()
+    summary = aggregate(ev4, points_map, rewards)
     st.dataframe(summary, use_container_width=True, height=520)
 
     if summary.empty:
