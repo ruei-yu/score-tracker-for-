@@ -12,6 +12,9 @@ import time, random
 import io, qrcode
 from urllib.parse import urlsplit, urlunsplit, quote, quote_plus
 
+# === 管理密碼 ===
+ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "") or "0906"
+
 def _sanitize_url(url: str) -> str:
     u = (url or "").strip()
     if not u:
@@ -718,34 +721,98 @@ with tabs[4]:
     st.subheader("完整記錄（可編輯）")
     st.caption("欄位：date, title, category, participant, idempotency_key（請勿修改 id 欄）")
 
-    edited = st.data_editor(st.session_state.events, num_rows="dynamic",
-                            use_container_width=True, key="full_editor_table")
+    # 原始資料（用來比對是否刪除）
+    orig_df = st.session_state.events.copy()
 
-    if edited is not None and not edited.empty:
-        st.session_state.events = edited
-        save_events_to_sheet(sh, edited)  # 會一併保存 idempotency_key
-    else:
-        st.info("（安全保護）偵測到空表，已跳過寫回 Google Sheet，以避免意外清空。")
+    # 可編輯表格
+    edited = st.data_editor(
+        orig_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="full_editor_table"
+    )
 
+    # 建 key 的工具：優先用 idempotency_key，沒有就用四欄組合
+    def _keyify(df):
+        if "idempotency_key" in df.columns and df["idempotency_key"].notna().all():
+            return set(df["idempotency_key"].astype(str).tolist())
+        # 後備：用四欄組合鍵（避免舊資料沒有 id 欄）
+        tmp = df[["date","title","category","participant"]].astype(str).agg("|".join, axis=1)
+        return set(tmp.tolist())
+
+    # 計算刪除的列
+    orig_keys = _keyify(orig_df) if not orig_df.empty else set()
+    new_keys  = _keyify(edited)  if edited is not None and not edited.empty else set()
+    deleted_keys = orig_keys - new_keys
+
+    # 管理密碼輸入（只有當偵測到刪除時才提示必填）
+    need_pw_for_delete = len(deleted_keys) > 0
+    admin_pw_input = ""
+    if need_pw_for_delete:
+        st.warning(f"偵測到刪除 {len(deleted_keys)} 筆資料。請輸入管理密碼才會套用刪除。")
+        admin_pw_input = st.text_input("管理密碼（刪除動作必填）", type="password", key="admin_pw_for_delete")
+
+    # 寫回邏輯
+    if edited is not None:
+        # 如果沒有任何資料，避免誤清空（沿用你原本的安全防護）
+        if edited.empty:
+            st.info("（安全保護）偵測到空表，已跳過寫回 Google Sheet，以避免意外清空。")
+        else:
+            # 有刪除 → 檢查密碼
+            if need_pw_for_delete:
+                if admin_pw_input != ADMIN_PASS:
+                    st.error("管理密碼錯誤，已拒絕套用刪除；表格內容已還原。")
+                    # 還原畫面上的資料
+                    st.session_state.events = orig_df
+                else:
+                    # 密碼正確：允許包含刪除在內的變更
+                    st.session_state.events = edited
+                    save_events_to_sheet(sh, edited)  # 覆蓋寫回（保留 id 欄）
+                    st.success("✅ 已保存（含刪除）。")
+            else:
+                # 無刪除：照常保存（允許新增與修改）
+                st.session_state.events = edited
+                save_events_to_sheet(sh, edited)
+                st.success("✅ 已保存（無刪除）。")
+
+       # === 底部三顆按鈕 ===
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.download_button("⬇️ 下載 CSV（匯出）",
-                           data=(st.session_state.events).to_csv(index=False, encoding="utf-8-sig"),
-                           file_name="events_export.csv", mime="text/csv",
-                           key="full_download_btn")
+        st.download_button(
+            "⬇️ 下載 CSV（匯出）",
+            data=(st.session_state.events).to_csv(index=False, encoding="utf-8-sig"),
+            file_name="events_export.csv",
+            mime="text/csv",
+            key="full_download_btn",
+        )
+
     with c2:
-        if st.button("🗄️ 歸檔並清空（建立新工作表備份）", key="full_archive_btn"):
-            backup_title = f"events_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            ws_backup = get_or_create_ws(sh, backup_title, EVENT_COLS)
-            df_to_ws(ws_backup, st.session_state.events, EVENT_COLS)
-            st.session_state.events = st.session_state.events.iloc[0:0]
-            save_events_to_sheet(sh, st.session_state.events, allow_clear=True)  # ← 只有這裡允許清空
-            st.success(f"已備份到工作表：{backup_title} 並清空。")
+        st.markdown("**🗄️ 歸檔並清空（建立新工作表備份）**")
+        pw_archive = st.text_input("管理密碼", type="password", key="admin_pw_archive")
+        if st.button("執行歸檔並清空", key="full_archive_btn"):
+            if pw_archive == ADMIN_PASS:
+                backup_title = f"events_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                ws_backup = get_or_create_ws(sh, backup_title, EVENT_COLS)
+                df_to_ws(ws_backup, st.session_state.events, EVENT_COLS)
+                st.session_state.events = st.session_state.events.iloc[0:0]
+                save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
+                st.success(f"✅ 已備份到工作表：{backup_title} 並清空。")
+            else:
+                st.error("❌ 管理密碼錯誤，已拒絕操作。")
+
     with c3:
-        if st.button("♻️ 只清空（不備份）", key="full_clear_btn"):
-            st.session_state.events = st.session_state.events.iloc[0:0]
-            save_events_to_sheet(sh, st.session_state.events, allow_clear=True)  # ← 刻意清空
-            st.success("已清空所有資料（未備份）。")
+        st.markdown("**♻️ 只清空（不備份）**")
+        pw_clear = st.text_input("管理密碼", type="password", key="admin_pw_clear")
+        confirm_clear = st.toggle("⚠️ 我確定要清空（不可復原）", key="confirm_clear_toggle")
+        if st.button("執行只清空", key="full_clear_btn"):
+            if pw_clear != ADMIN_PASS:
+                st.error("❌ 管理密碼錯誤，已拒絕操作。")
+            elif not confirm_clear:
+                st.warning("請勾選確認後再執行。")
+            else:
+                st.session_state.events = st.session_state.events.iloc[0:0]
+                save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
+                st.success("✅ 已清空所有資料（未備份）。")
 
 # -------- 5) 排行榜 --------
 with tabs[5]:
