@@ -375,7 +375,7 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
     return "ERR"
 
     def append_events_rows(sh, rows: list[dict]):
-        """統一入口：優先用 API；沒有 API 時退回直接寫表（含冪等鍵與索引維護）"""
+    """統一入口：優先用 API；沒有 API 時退回直接寫表（含冪等鍵與索引維護）"""
     if not rows:
         return {"added": [], "skipped": []}
 
@@ -393,7 +393,7 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
                 st.warning(f"{p} 寫入失敗：{res}")
         return {"added": added, "skipped": skipped}
 
-    # ── 否則走「直接寫表」的穩定版（本地去重 + 兩表附寫） ──
+    # ── 否則走「直接寫表」：本地去重 + 兩表附寫 ──
     ws_events = get_or_create_ws(sh, "events", EVENT_COLS)
     ws_keys   = load_event_keys_ws(sh)
     keyset = load_event_keyset(sh)
@@ -404,12 +404,10 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
         d, t, c, p = r["date"], r["title"], r["category"], r["participant"]
         k = make_idempotency_key(p, t, c, d)
         if k in keyset:
-            skipped.append(p)
-            continue
+            skipped.append(p); continue
         evt_payload.append([d, t, c, p, k])
         key_payload.append([k, d, t, c, p])
-        keyset.add(k)
-        added.append(p)
+        keyset.add(k); added.append(p)
 
     ok1 = safe_append(ws_events, evt_payload, value_input_option="USER_ENTERED") if evt_payload else True
     ok2 = safe_append(ws_keys,   key_payload, value_input_option="USER_ENTERED") if key_payload else True
@@ -417,7 +415,6 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
     if not (ok1 and ok2):
         st.warning("部分寫入失敗，請稍後在『完整記錄』確認。")
     return {"added": added, "skipped": skipped}
-
 
     # 取現有 keyset（快取 120s）
     keyset = load_event_keyset(sh)
