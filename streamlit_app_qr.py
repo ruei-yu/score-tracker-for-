@@ -725,12 +725,25 @@ with tabs[0]:
     else:
         st.info("請貼上你的 .streamlit.app 根網址（本頁網址）。")
 
-    with st.expander("🔎 目前所有短代碼一覽", expanded=False):
-        st.dataframe(links_df.sort_values("date", ascending=False), use_container_width=True, height=220)
-        st.download_button("⬇️ 下載連結代碼 CSV（匯出）",
-                           data=links_df.to_csv(index=False, encoding="utf-8-sig"),
-                           file_name="links.csv", mime="text/csv",
-                           key="links_download_btn")
+import io
+
+with st.expander("🔎 目前所有短代碼一覽", expanded=False):
+    st.dataframe(links_df.sort_values("date", ascending=False),
+                 use_container_width=True, height=220)
+
+    # 匯出成 Excel 檔
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        links_df.to_excel(writer, index=False, sheet_name="links")
+
+    st.download_button(
+        "⬇️ 下載連結代碼 Excel（匯出）",
+        data=output.getvalue(),
+        file_name="links.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="links_download_excel_btn"
+    )
+
 
     if st.button("🧹 清空所有短代碼（links）", key="links_clear_btn"):
         st.session_state.links = st.session_state.links.iloc[0:0]
@@ -791,9 +804,9 @@ with tabs[2]:
             st.dataframe(show_df[["participant","title","category"]]
                          .sort_values(["category","participant"]),
                          use_container_width=True, height=300)
-            st.download_button("⬇️ 下載當日明細 CSV（匯出）",
-                               data=show_df.to_csv(index=False, encoding="utf-8-sig"),
-                               file_name=f"events_{sel_date_str}.csv", mime="text/csv",
+            st.download_button("⬇️ 下載當日明細 Excel（匯出）",
+                               data=show_df.to_xlsx(index=False, encoding="utf-8-sig"),
+                               file_name=f"events_{sel_date_str}.xlsx", mime="text/xlsx",
                                key="bydate_download_btn")
 
 # -------- 3) 個人明細 --------
@@ -815,9 +828,9 @@ with tabs[3]:
             dfp = dfp[dfp["category"].isin(only_cat)]
         st.dataframe(dfp[["date","title","category"]].sort_values("date"),
                      use_container_width=True, height=350)
-        st.download_button("⬇️ 下載此人明細 CSV（匯出）",
-                           data=dfp.to_csv(index=False, encoding="utf-8-sig"),
-                           file_name=f"{person}_records.csv", mime="text/csv",
+        st.download_button("⬇️ 下載此人明細 Excel（匯出）",
+                           data=dfp.to_xlsx(index=False, encoding="utf-8-sig"),
+                           file_name=f"{person}_records.xlsx", mime="text/xlsx",
                            key="detail_download_btn")
 
 # === 管理密碼（可放到 secrets: [app].admin_password） ===
@@ -960,10 +973,10 @@ with tabs[4]:
     c1, c2, c3 = st.columns(3)
     with c1:
         st.download_button(
-            "⬇️ 下載 CSV（匯出）",
-            data=(st.session_state.events).to_csv(index=False, encoding="utf-8-sig"),
-            file_name="events_export.csv",
-            mime="text/csv",
+            "⬇️ 下載 Excel（匯出）",
+            data=(st.session_state.events).to_xlsx(index=False, encoding="utf-8-sig"),
+            file_name="events_export.xlsx",
+            mime="text/xlsx",
             key="full_download_btn",
         )
 
@@ -994,12 +1007,13 @@ with tabs[5]:
         c1, c2, c3 = st.columns(3)
         with c1:
             st.download_button(
-                "⬇️ 下載排行榜 CSV",
-                data=summary.to_csv(index=False, encoding="utf-8-sig"),
-                file_name="leaderboard.csv",
-                mime="text/csv",
-                key="leaderboard_download_btn",
+                "⬇️ 下載排行榜 Excel",
+                data=output.getvalue(),
+                file_name="leaderboard.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="leaderboard_download_excel_btn",
             )
+
         with c2:
             if st.button("📤 匯出排行榜到 Google Sheet（leaderboard）", key="leaderboard_export_btn"):
                 ws_lb = get_or_create_ws(sh, "leaderboard", list(summary.columns))
