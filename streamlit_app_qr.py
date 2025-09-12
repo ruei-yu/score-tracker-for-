@@ -374,7 +374,7 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
 
     return "ERR"
 
-   def append_events_rows(sh, rows: list[dict]):
+    def append_events_rows(sh, rows: list[dict]):
     """統一入口：優先用 API；沒有 API 時退回直接寫表（含冪等鍵與索引維護）"""
     if not rows:
         return {"added": [], "skipped": []}
