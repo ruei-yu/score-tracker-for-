@@ -898,6 +898,60 @@ def _count_deleted_rows(before_df: pd.DataFrame, after_df: pd.DataFrame) -> int:
         return set(combo)
     return len(keyset(before_df) - keyset(after_df))
 
+# -------- 4) 完整記錄 --------
+with tabs[4]:
+    st.subheader("完整記錄（可編輯）")
+    st.caption("欄位：date, title, category, participant, idempotency_key（請勿修改 id 欄）")
+
+    # 顯示可編輯表，先保留原始快照
+    original_df = st.session_state.events.copy()
+
+    edited = st.data_editor(
+        original_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="full_editor_table",
+        column_config={
+            "idempotency_key": st.column_config.TextColumn("idempotency_key", disabled=True),
+        },
+    )
+
+    # 顯示刪除偵測結果（純提示）
+    del_cnt = _count_deleted_rows(original_df, edited)
+    st.info(f"本次變更偵測到：刪除 {del_cnt} 筆（若為 0 代表只有新增/修改）。")
+
+    # 保存變更：若有刪除 → 先要求密碼；否則直接寫回
+    if st.button("💾 保存變更", key="full_save_btn"):
+        if del_cnt > 0:
+            _need_pw("delete_rows", {"edited_df": edited})
+        else:
+            st.session_state.events = edited
+            save_events_to_sheet(sh, edited)
+            st.success("✅ 已保存變更（無刪除）。")
+
+    # 下載鈕
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.download_button(
+            "⬇️ 下載 CSV（匯出）",
+            data=(st.session_state.events).to_csv(index=False, encoding="utf-8-sig"),
+            file_name="events_export.csv",
+            mime="text/csv",
+            key="full_download_btn",
+        )
+
+    # 歸檔並清空（先要求密碼）
+    with c2:
+        st.markdown("**🗄️ 歸檔並清空（建立新工作表備份）**")
+        if st.button("執行歸檔並清空", key="full_archive_btn"):
+            backup_title = f"events_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            _need_pw("archive_clear", {"backup_title": backup_title})
+
+    # 只清空（先要求密碼）
+    with c3:
+        st.markdown("**♻️ 只清空（不備份）**")
+        if st.button("執行只清空", key="full_clear_btn"):
+            _need_pw("clear_only", {})
 
 
 # -------- 5) 排行榜 --------
