@@ -285,6 +285,20 @@ def _count_deleted_rows(before_df: pd.DataFrame, after_df: pd.DataFrame) -> int:
         return set(combo)
     return len(keyset(before_df) - keyset(after_df))
 
+# 這四欄是判斷「是否為有效資料列」的主鍵欄
+KEY_COLS = ["date","title","category","participant"]
+
+def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+    """去前後空白、把 NaN 變空字串，避免 '張三 ' 被誤判成不同"""
+    out = df.copy()
+    for c in df.columns:
+        out[c] = out[c].astype(str).fillna("").str.strip()
+    return out
+
+def _is_blank_row(row) -> bool:
+    """四個主鍵欄位全空，視為『空列』"""
+    return all((str(row.get(c, "")).strip() == "") for c in KEY_COLS)
+
 
 # ---------- 新增：穩定寫入（append + 退避重試） ----------
 def safe_append(ws, rows: list[list], *, value_input_option: str = "RAW") -> bool:
@@ -903,12 +917,12 @@ with tabs[4]:
     st.subheader("完整記錄（可編輯）")
     st.caption("欄位：date, title, category, participant, idempotency_key（請勿修改 id 欄）")
 
-    # 顯示可編輯表，先保留原始快照
-    original_df = st.session_state.events.copy()
+    # 原始快照（供刪除偵測）
+    original_df = _normalize_df(st.session_state.events)
 
     edited = st.data_editor(
-        original_df,
-        num_rows="dynamic",
+        st.session_state.events,
+        num_rows="dynamic",  # 可新增/刪除列
         use_container_width=True,
         key="full_editor_table",
         column_config={
@@ -916,18 +930,31 @@ with tabs[4]:
         },
     )
 
-    # 顯示刪除偵測結果（純提示）
-    del_cnt = _count_deleted_rows(original_df, edited)
-    st.info(f"本次變更偵測到：刪除 {del_cnt} 筆（若為 0 代表只有新增/修改）。")
+    # ---- 不要自動寫回！等按『保存變更』時才處理 ----
 
-    # 保存變更：若有刪除 → 先要求密碼；否則直接寫回
+    # 把使用者編輯後的資料做一次正規化，並把全空列先濾掉（視為刪除）
+    edited_norm = _normalize_df(edited)
+    edited_nonblank = edited_norm[~edited_norm.apply(_is_blank_row, axis=1)].reset_index(drop=True)
+
+    # 計算刪除筆數（包含真的刪列，及「清空成空列」的情況）
+    def _keyset(df: pd.DataFrame) -> set[str]:
+        if "idempotency_key" in df.columns and df["idempotency_key"].astype(str).str.len().gt(0).any():
+            return set(df["idempotency_key"].astype(str))
+        combo = (
+            df["date"].astype(str) + "|" +
+            df["title"].astype(str) + "|" +
+            df["category"].astype(str) + "|" +
+            df["participant"].astype(str)
+        )
+        return set(combo)
+
+    deleted_count = len(_keyset(original_df) - _keyset(edited_nonblank))
+    st.info(f"本次變更偵測到：刪除 {deleted_count} 筆（若為 0 代表只有新增/修改，或是你還沒按「刪除列」而只是清空欄位）。")
+
+    # 保存變更：只在這個按鈕被按時才會寫回
     if st.button("💾 保存變更", key="full_save_btn"):
-        if del_cnt > 0:
-            _need_pw("delete_rows", {"edited_df": edited})
-        else:
-            st.session_state.events = edited
-            save_events_to_sheet(sh, edited)
-            st.success("✅ 已保存變更（無刪除）。")
+        # 無論是否刪除，只要要寫回，我們都走密碼（你也可以只在 deleted_count>0 時走密碼）
+        _need_pw("delete_rows", {"edited_df": edited_nonblank})
 
     # 下載鈕
     c1, c2, c3 = st.columns(3)
@@ -952,7 +979,6 @@ with tabs[4]:
         st.markdown("**♻️ 只清空（不備份）**")
         if st.button("執行只清空", key="full_clear_btn"):
             _need_pw("clear_only", {})
-
 
 # -------- 5) 排行榜 --------
 with tabs[5]:
@@ -988,4 +1014,5 @@ with tabs[5]:
 
 # 若有待執行動作，顯示密碼對話框
 _show_pw_dialog()
+
 
