@@ -5,3 +5,4 @@ pandas>=2.2
 qrcode[pil]==7.4.2
 pillow>=10.3
 qrcode[pil]
+openpyxl==3.1.*
