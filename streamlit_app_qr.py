@@ -752,26 +752,18 @@ import io
 with st.expander("🔎 目前所有短代碼一覽", expanded=False):
     st.dataframe(links_df.sort_values("date", ascending=False),
                  use_container_width=True, height=220)
-
-    # 匯出成 Excel 檔
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        links_df.to_excel(writer, index=False, sheet_name="links")
-
     st.download_button(
         "⬇️ 下載連結代碼 Excel（匯出）",
-        data=output.getvalue(),
+        data=df_to_excel_bytes(links_df, "links"),
         file_name="links.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="links_download_excel_btn"
+        key="links_download_excel_btn",
     )
-
-
     if st.button("🧹 清空所有短代碼（links）", key="links_clear_btn"):
         st.session_state.links = st.session_state.links.iloc[0:0]
         save_links_to_sheet(sh, st.session_state.links)
         st.success("已清空所有短代碼。")
-        
+
 # -------- 1) 現場報到 --------
 with tabs[1]:
     st.subheader("現場快速報到")
@@ -831,11 +823,12 @@ with tabs[2]:
                 show_df.to_excel(writer, index=False, sheet_name="events")
             st.download_button(
                 "⬇️ 下載當日明細 Excel（匯出）",
-                data=buf_bydate.getvalue(),
+                data=df_to_excel_bytes(show_df, "events"),
                 file_name=f"events_{sel_date_str}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="bydate_download_btn",
             )
+
 
 
 # -------- 3) 個人明細 --------
@@ -862,12 +855,11 @@ with tabs[3]:
             dfp.to_excel(writer, index=False, sheet_name="records")
         st.download_button(
             "⬇️ 下載此人明細 Excel（匯出）",
-            data=buf_detail.getvalue(),
+            data=df_to_excel_bytes(dfp, "records"),
             file_name=f"{person}_records.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="detail_download_btn",
         )
-
 
 # === 管理密碼（可放到 secrets: [app].admin_password） ===
 ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "") or "0906"
@@ -1013,11 +1005,12 @@ with tabs[4]:
             st.session_state.events.to_excel(writer, index=False, sheet_name="events")
         st.download_button(
             "⬇️ 下載 Excel（匯出）",
-            data=buf_full.getvalue(),
+            data=df_to_excel_bytes(st.session_state.events, "events"),
             file_name="events_export.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="full_download_btn",
         )
+
 
 
     # 歸檔並清空（先要求密碼）
@@ -1051,13 +1044,11 @@ with tabs[5]:
                 summary.to_excel(writer, index=False, sheet_name="leaderboard")
             st.download_button(
                 "⬇️ 下載排行榜 Excel",
-                data=buf_lb.getvalue(),
+                data=df_to_excel_bytes(summary, "leaderboard"),
                 file_name="leaderboard.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="leaderboard_download_excel_btn",
             )
-
-
         with c2:
             if st.button("📤 匯出排行榜到 Google Sheet（leaderboard）", key="leaderboard_export_btn"):
                 ws_lb = get_or_create_ws(sh, "leaderboard", list(summary.columns))
