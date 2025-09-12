@@ -374,7 +374,6 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
 
     return "ERR"
 
-
    def append_events_rows(sh, rows: list[dict]):
     """統一入口：優先用 API；沒有 API 時退回直接寫表（含冪等鍵與索引維護）"""
     if not rows:
@@ -405,10 +404,12 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
         d, t, c, p = r["date"], r["title"], r["category"], r["participant"]
         k = make_idempotency_key(p, t, c, d)
         if k in keyset:
-            skipped.append(p); continue
+            skipped.append(p)
+            continue
         evt_payload.append([d, t, c, p, k])
         key_payload.append([k, d, t, c, p])
-        keyset.add(k); added.append(p)
+        keyset.add(k)
+        added.append(p)
 
     ok1 = safe_append(ws_events, evt_payload, value_input_option="USER_ENTERED") if evt_payload else True
     ok2 = safe_append(ws_keys,   key_payload, value_input_option="USER_ENTERED") if key_payload else True
@@ -416,6 +417,7 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
     if not (ok1 and ok2):
         st.warning("部分寫入失敗，請稍後在『完整記錄』確認。")
     return {"added": added, "skipped": skipped}
+
 
     # 取現有 keyset（快取 120s）
     keyset = load_event_keyset(sh)
@@ -524,10 +526,6 @@ if mode == "checkin":
 
 # ================= Admin UI =================
 st.title("🔢護持活動集點(for幹部)")
-
-# Sidebar settings（用 Google Sheet 而不是檔案路徑）
-st.sidebar.title("⚙️ 設定（Google Sheet）")
-st.sidebar.success(f"已綁定試算表：{st.secrets['google_sheets']['sheet_id']}")
 
 # Sidebar settings（用 Google Sheet 而不是檔案路徑）
 st.sidebar.title("⚙️ 設定（Google Sheet）")
