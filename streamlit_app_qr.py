@@ -373,8 +373,8 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
         time.sleep(min(2 ** i, 8) + random.random() * 0.3)
 
     return "ERR"
-
-    def append_events_rows(sh, rows: list[dict]):
+    
+def append_events_rows(sh, rows: list[dict]):
     """統一入口：優先用 API；沒有 API 時退回直接寫表（含冪等鍵與索引維護）"""
     if not rows:
         return {"added": [], "skipped": []}
@@ -416,38 +416,11 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
         st.warning("部分寫入失敗，請稍後在『完整記錄』確認。")
     return {"added": added, "skipped": skipped}
 
-    # 取現有 keyset（快取 120s）
-    keyset = load_event_keyset(sh)
-
-    # 建立 payload（去重）
-    evt_payload, key_payload = [], []
-    accepted_names, skipped_names = [], []
-
-    for r in rows:
-        d, t, c, p = r["date"], r["title"], r["category"], r["participant"]
-        key = make_idempotency_key(p, t, c, d)
-        if key in keyset:
-            skipped_names.append(p)
-            continue
-        evt_payload.append([d, t, c, p, key])
-        key_payload.append([key, d, t, c, p])
-        keyset.add(key)
-        accepted_names.append(p)
-
-    if not evt_payload:
-        return {"added": [], "skipped": skipped_names}
-
-    ok1 = safe_append(ws_events, evt_payload, value_input_option="USER_ENTERED")
-    ok2 = safe_append(ws_keys, key_payload, value_input_option="USER_ENTERED")
-
-    # 失敗時讓快取早點失效，避免短時間內誤判
-    st.cache_data.clear()
-
-    if not (ok1 and ok2):
-        # 局部失敗時提示，但保留已成功者
-        st.warning("部分寫入失敗，請稍後在『完整記錄』確認。")
-
-    return {"added": accepted_names, "skipped": skipped_names}
+# ==== 寫入模式：API 或 直接寫 Sheet（必須放在會呼叫 append_events_rows 之前）====
+AS_URL = st.secrets.get("apps_script", {}).get("web_app_url", "").strip()
+use_api_default = bool(AS_URL)
+# 預設模式給個全域值（讓 public checkin 時也有值）
+WRITE_MODE = "透過後端 API（推薦）" if use_api_default else "直接寫入 Google Sheet"
 
 # ================= Query Params / Sheet ID bootstrap =================
 qp = st.query_params
@@ -528,9 +501,6 @@ st.title("🔢護持活動集點(for幹部)")
 st.sidebar.title("⚙️ 設定（Google Sheet）")
 st.sidebar.success(f"已綁定試算表：{st.secrets['google_sheets']['sheet_id']}")
 
-# ==== 寫入模式：API 或 直接寫 Sheet ====
-AS_URL = st.secrets.get("apps_script", {}).get("web_app_url", "").strip()
-use_api_default = bool(AS_URL)
 WRITE_MODE = st.sidebar.radio(
     "寫入模式",
     options=["透過後端 API（推薦）", "直接寫入 Google Sheet"],
