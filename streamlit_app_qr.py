@@ -15,6 +15,33 @@ from urllib.parse import urlsplit, urlunsplit, quote, quote_plus
 # === 管理密碼 ===
 ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "") or "0906"
 
+# === 通用密碼對話框（使用 Streamlit 的 st.dialog）===
+try:
+    from streamlit.runtime.scriptrunner.script_run_context import add_script_run_ctx  # 只是確保 streamlit 版本具備對話框
+    HAVE_DIALOG = True
+except Exception:
+    HAVE_DIALOG = False
+
+def ask_password_dialog(state_flag: str, title: str = "需要管理密碼") -> None:
+    """開啟一個密碼輸入對話框。成功後會把 st.session_state[state_flag] 設為 True。"""
+    if not HAVE_DIALOG:
+        return  # 舊版不支援對話框時，外層會改用欄位內輸入
+    @st.dialog(title)
+    def _dlg():
+        pw = st.text_input("請輸入管理密碼", type="password", key=f"pw_{state_flag}")
+        c1, c2 = st.columns(2)
+        if c1.button("確認"):
+            if pw == ADMIN_PASS:
+                st.session_state[state_flag] = True
+                st.rerun()
+            else:
+                st.error("密碼錯誤")
+        if c2.button("取消"):
+            st.session_state[state_flag] = False
+            st.rerun()
+    _dlg()
+
+
 def _sanitize_url(url: str) -> str:
     u = (url or "").strip()
     if not u:
@@ -699,9 +726,8 @@ with tabs[3]:
     else:
         c1, c2 = st.columns(2)
         with c1:
-            person = st.selectbox("選擇參加者",
-                                  sorted(st.session_state.events["participant"].unique()),
-                                  key="detail_person_select")
+            participants = sorted(st.session_state.events["participant"].astype(str).fillna("").unique().tolist())
+            person = st.selectbox("選擇參加者", participants, key="detail_person_select")
         with c2:
             only_cat = st.multiselect("篩選類別（可多選）",
                                       options=sorted(st.session_state.events["category"].unique()),
@@ -721,61 +747,54 @@ with tabs[4]:
     st.subheader("完整記錄（可編輯）")
     st.caption("欄位：date, title, category, participant, idempotency_key（請勿修改 id 欄）")
 
-    # 原始資料（用來比對是否刪除）
-    orig_df = st.session_state.events.copy()
-
-    # 可編輯表格
+    # 1) 顯示可編輯表，先保留原始快照
+    original_df = st.session_state.events.copy()
     edited = st.data_editor(
-        orig_df,
+        original_df,
         num_rows="dynamic",
         use_container_width=True,
-        key="full_editor_table"
+        key="full_editor_table",
+        column_config={
+            "idempotency_key": st.column_config.TextColumn("idempotency_key", disabled=True),  # 禁止碰 id
+        },
     )
 
-    # 建 key 的工具：優先用 idempotency_key，沒有就用四欄組合
-    def _keyify(df):
-        if "idempotency_key" in df.columns and df["idempotency_key"].notna().all():
+    # 2) 計算是否「有刪除」
+    #    用 idempotency_key 判斷最準；若沒有就用四欄拼 key
+    def _row_key(df):
+        if "idempotency_key" in df.columns and df["idempotency_key"].notna().any():
             return set(df["idempotency_key"].astype(str).tolist())
-        # 後備：用四欄組合鍵（避免舊資料沒有 id 欄）
-        tmp = df[["date","title","category","participant"]].astype(str).agg("|".join, axis=1)
-        return set(tmp.tolist())
-
-    # 計算刪除的列
-    orig_keys = _keyify(orig_df) if not orig_df.empty else set()
-    new_keys  = _keyify(edited)  if edited is not None and not edited.empty else set()
-    deleted_keys = orig_keys - new_keys
-
-    # 管理密碼輸入（只有當偵測到刪除時才提示必填）
-    need_pw_for_delete = len(deleted_keys) > 0
-    admin_pw_input = ""
-    if need_pw_for_delete:
-        st.warning(f"偵測到刪除 {len(deleted_keys)} 筆資料。請輸入管理密碼才會套用刪除。")
-        admin_pw_input = st.text_input("管理密碼（刪除動作必填）", type="password", key="admin_pw_for_delete")
-
-    # 寫回邏輯
-    if edited is not None:
-        # 如果沒有任何資料，避免誤清空（沿用你原本的安全防護）
-        if edited.empty:
-            st.info("（安全保護）偵測到空表，已跳過寫回 Google Sheet，以避免意外清空。")
         else:
-            # 有刪除 → 檢查密碼
-            if need_pw_for_delete:
-                if admin_pw_input != ADMIN_PASS:
-                    st.error("管理密碼錯誤，已拒絕套用刪除；表格內容已還原。")
-                    # 還原畫面上的資料
-                    st.session_state.events = orig_df
-                else:
-                    # 密碼正確：允許包含刪除在內的變更
-                    st.session_state.events = edited
-                    save_events_to_sheet(sh, edited)  # 覆蓋寫回（保留 id 欄）
-                    st.success("✅ 已保存（含刪除）。")
-            else:
-                # 無刪除：照常保存（允許新增與修改）
-                st.session_state.events = edited
-                save_events_to_sheet(sh, edited)
-                st.success("✅ 已保存（無刪除）。")
+            return set((df["date"].astype(str) + "|" + df["title"].astype(str) + "|" +
+                        df["category"].astype(str) + "|" + df["participant"].astype(str)).tolist())
 
-       # === 底部三顆按鈕 ===
+    orig_keys = _row_key(original_df)
+    edit_keys = _row_key(edited)
+    deleted_count = len(orig_keys - edit_keys)
+
+    st.info(f"本次變更：刪除 {deleted_count} 筆、其餘為新增/修改。")
+
+    # 3) 保存按鈕：若有刪除，必須密碼
+    if st.button("💾 保存變更（需要時將驗證密碼）", key="full_save_btn"):
+        if deleted_count > 0:
+            flag = "auth_delete_rows"
+            st.session_state[flag] = st.session_state.get(flag, False)
+            if not st.session_state[flag]:
+                # 開啟對話框
+                if HAVE_DIALOG:
+                    ask_password_dialog(flag, "刪除資料需要管理密碼")
+                    st.stop()
+                else:
+                    st.warning("目前環境不支援對話框，請先在下方輸入管理密碼再按一次保存。")
+                    st.stop()
+        # 通過驗證或沒有刪除 → 寫回
+        st.session_state.events = edited
+        save_events_to_sheet(sh, edited)  # 會連同 idempotency_key 一起保存
+        # 重置刪除驗證旗標
+        st.session_state["auth_delete_rows"] = False
+        st.success("✅ 已保存變更。")
+
+    # === 底部三顆按鈕 ===
     c1, c2, c3 = st.columns(3)
     with c1:
         st.download_button(
@@ -786,33 +805,45 @@ with tabs[4]:
             key="full_download_btn",
         )
 
-    with c2:
+
+        with c2:
         st.markdown("**🗄️ 歸檔並清空（建立新工作表備份）**")
-        pw_archive = st.text_input("管理密碼", type="password", key="admin_pw_archive")
         if st.button("執行歸檔並清空", key="full_archive_btn"):
-            if pw_archive == ADMIN_PASS:
-                backup_title = f"events_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                ws_backup = get_or_create_ws(sh, backup_title, EVENT_COLS)
-                df_to_ws(ws_backup, st.session_state.events, EVENT_COLS)
-                st.session_state.events = st.session_state.events.iloc[0:0]
-                save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
-                st.success(f"✅ 已備份到工作表：{backup_title} 並清空。")
-            else:
-                st.error("❌ 管理密碼錯誤，已拒絕操作。")
+            flag = "auth_archive_clear"
+            st.session_state[flag] = st.session_state.get(flag, False)
+            if not st.session_state[flag]:
+                if HAVE_DIALOG:
+                    ask_password_dialog(flag, "歸檔並清空需要管理密碼")
+                    st.stop()
+                else:
+                    st.warning("目前環境不支援對話框，請先在下方輸入管理密碼，再按一次。")
+                    st.stop()
+            # 通過驗證 → 執行
+            backup_title = f"events_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            ws_backup = get_or_create_ws(sh, backup_title, EVENT_COLS)
+            df_to_ws(ws_backup, st.session_state.events, EVENT_COLS)
+            st.session_state.events = st.session_state.events.iloc[0:0]
+            save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
+            st.session_state[flag] = False
+            st.success(f"✅ 已備份到工作表：{backup_title} 並清空。")
 
     with c3:
         st.markdown("**♻️ 只清空（不備份）**")
-        pw_clear = st.text_input("管理密碼", type="password", key="admin_pw_clear")
-        confirm_clear = st.toggle("⚠️ 我確定要清空（不可復原）", key="confirm_clear_toggle")
         if st.button("執行只清空", key="full_clear_btn"):
-            if pw_clear != ADMIN_PASS:
-                st.error("❌ 管理密碼錯誤，已拒絕操作。")
-            elif not confirm_clear:
-                st.warning("請勾選確認後再執行。")
-            else:
-                st.session_state.events = st.session_state.events.iloc[0:0]
-                save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
-                st.success("✅ 已清空所有資料（未備份）。")
+            flag = "auth_clear_only"
+            st.session_state[flag] = st.session_state.get(flag, False)
+            if not st.session_state[flag]:
+                if HAVE_DIALOG:
+                    ask_password_dialog(flag, "清空資料需要管理密碼")
+                    st.stop()
+                else:
+                    st.warning("目前環境不支援對話框，請先在下方輸入管理密碼，再按一次。")
+                    st.stop()
+            st.session_state.events = st.session_state.events.iloc[0:0]
+            save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
+            st.session_state[flag] = False
+            st.success("✅ 已清空所有資料（未備份）。")
+
 
 # -------- 5) 排行榜 --------
 with tabs[5]:
