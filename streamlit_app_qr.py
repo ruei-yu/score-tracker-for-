@@ -12,35 +12,6 @@ import time, random
 import io, qrcode
 from urllib.parse import urlsplit, urlunsplit, quote, quote_plus
 
-# === 管理密碼 ===
-ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "") or "0906"
-
-# === 通用密碼對話框（使用 Streamlit 的 st.dialog）===
-try:
-    from streamlit.runtime.scriptrunner.script_run_context import add_script_run_ctx  # 只是確保 streamlit 版本具備對話框
-    HAVE_DIALOG = True
-except Exception:
-    HAVE_DIALOG = False
-
-def ask_password_dialog(state_flag: str, title: str = "需要管理密碼") -> None:
-    """開啟一個密碼輸入對話框。成功後會把 st.session_state[state_flag] 設為 True。"""
-    if not HAVE_DIALOG:
-        return  # 舊版不支援對話框時，外層會改用欄位內輸入
-    @st.dialog(title)
-    def _dlg():
-        pw = st.text_input("請輸入管理密碼", type="password", key=f"pw_{state_flag}")
-        c1, c2 = st.columns(2)
-        if c1.button("確認"):
-            if pw == ADMIN_PASS:
-                st.session_state[state_flag] = True
-                st.rerun()
-            else:
-                st.error("密碼錯誤")
-        if c2.button("取消"):
-            st.session_state[state_flag] = False
-            st.rerun()
-    _dlg()
-
 
 def _sanitize_url(url: str) -> str:
     u = (url or "").strip()
@@ -221,6 +192,99 @@ def safe_write_ws(ws, df: pd.DataFrame, expected_cols: list[str], *, allow_clear
 def df_to_ws(ws, df: pd.DataFrame, expected_cols: list[str]):
     """保留給非 events 類表格（如設定/排行榜）覆蓋寫回使用。"""
     safe_write_ws(ws, df, expected_cols, allow_clear=True)
+
+# === 管理密碼（可放到 secrets: [app].admin_password） ===
+ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "") or "0906"
+
+# === 是否有 st.dialog（舊版 Streamlit 沒有）===
+try:
+    HAVE_DIALOG = hasattr(st, "dialog")
+except Exception:
+    HAVE_DIALOG = False
+
+def _need_pw(action_key: str, payload: dict | None = None):
+    """要求密碼：把動作與負載存入 session_state，觸發重新渲染去顯示對話框。"""
+    st.session_state["pending_action"] = action_key
+    st.session_state["pending_payload"] = payload or {}
+    st.rerun()
+
+def _show_pw_dialog():
+    """若有待執行動作，就顯示密碼對話框；驗證通過後執行並清理旗標。"""
+    action = st.session_state.get("pending_action")
+    if not action:
+        return
+
+    title = {
+        "delete_rows": "刪除資料需要管理密碼",
+        "archive_clear": "歸檔並清空需要管理密碼",
+        "clear_only": "清空資料需要管理密碼",
+    }.get(action, "需要管理密碼")
+
+    # 用 st.dialog（新版）或 inline（舊版）
+    def render_inner():
+        pw = st.text_input("請輸入管理密碼", type="password", key="__admin_pw")
+        c1, c2 = st.columns(2)
+        if c1.button("確認"):
+            if pw == ADMIN_PASS:
+                # 執行動作
+                _exec_pending_action()
+                # 清理
+                st.session_state["pending_action"] = ""
+                st.session_state["pending_payload"] = {}
+                st.success("已完成。")
+                st.rerun()
+            else:
+                st.error("密碼錯誤")
+        if c2.button("取消"):
+            st.session_state["pending_action"] = ""
+            st.session_state["pending_payload"] = {}
+            st.rerun()
+
+    if HAVE_DIALOG:
+        @st.dialog(title)
+        def _dlg():
+            render_inner()
+        _dlg()
+    else:
+        st.warning(title)
+        render_inner()
+
+def _exec_pending_action():
+    """依 pending_action 執行實際工作。"""
+    action = st.session_state.get("pending_action")
+    payload = st.session_state.get("pending_payload") or {}
+
+    if action == "delete_rows":
+        edited = payload["edited_df"]
+        # 真正寫回
+        st.session_state.events = edited
+        save_events_to_sheet(sh, edited)
+
+    elif action == "archive_clear":
+        backup_title = payload["backup_title"]
+        ws_backup = get_or_create_ws(sh, backup_title, EVENT_COLS)
+        df_to_ws(ws_backup, st.session_state.events, EVENT_COLS)
+        st.session_state.events = st.session_state.events.iloc[0:0]
+        save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
+
+    elif action == "clear_only":
+        st.session_state.events = st.session_state.events.iloc[0:0]
+        save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
+
+def _count_deleted_rows(before_df: pd.DataFrame, after_df: pd.DataFrame) -> int:
+    """用 idempotency_key 判斷刪除；若沒有就用四欄組合鍵。更穩。"""
+    def keyset(df: pd.DataFrame) -> set[str]:
+        if "idempotency_key" in df.columns and df["idempotency_key"].astype(str).str.len().gt(0).any():
+            return set(df["idempotency_key"].astype(str))
+        combo = (
+            df["date"].astype(str) + "|" +
+            df["title"].astype(str) + "|" +
+            df["category"].astype(str) + "|" +
+            df["participant"].astype(str)
+        )
+        return set(combo)
+    return len(keyset(before_df) - keyset(after_df))
+
 
 # ---------- 新增：穩定寫入（append + 退避重試） ----------
 def safe_append(ws, rows: list[list], *, value_input_option: str = "RAW") -> bool:
@@ -742,105 +806,97 @@ with tabs[3]:
                            file_name=f"{person}_records.csv", mime="text/csv",
                            key="detail_download_btn")
 
-# -------- 4) 完整記錄 --------
-with tabs[4]:
-    st.subheader("完整記錄（可編輯）")
-    st.caption("欄位：date, title, category, participant, idempotency_key（請勿修改 id 欄）")
+# === 管理密碼（可放到 secrets: [app].admin_password） ===
+ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "") or "0906"
 
-    # 1) 顯示可編輯表，先保留原始快照
-    original_df = st.session_state.events.copy()
-    edited = st.data_editor(
-        original_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="full_editor_table",
-        column_config={
-            "idempotency_key": st.column_config.TextColumn("idempotency_key", disabled=True),  # 禁止碰 id
-        },
-    )
+# === 是否有 st.dialog（舊版 Streamlit 沒有）===
+try:
+    HAVE_DIALOG = hasattr(st, "dialog")
+except Exception:
+    HAVE_DIALOG = False
 
-    # 2) 計算是否「有刪除」
-    #    用 idempotency_key 判斷最準；若沒有就用四欄拼 key
-    def _row_key(df):
-        if "idempotency_key" in df.columns and df["idempotency_key"].notna().any():
-            return set(df["idempotency_key"].astype(str).tolist())
-        else:
-            return set((df["date"].astype(str) + "|" + df["title"].astype(str) + "|" +
-                        df["category"].astype(str) + "|" + df["participant"].astype(str)).tolist())
+def _need_pw(action_key: str, payload: dict | None = None):
+    """要求密碼：把動作與負載存入 session_state，觸發重新渲染去顯示對話框。"""
+    st.session_state["pending_action"] = action_key
+    st.session_state["pending_payload"] = payload or {}
+    st.rerun()
 
-    orig_keys = _row_key(original_df)
-    edit_keys = _row_key(edited)
-    deleted_count = len(orig_keys - edit_keys)
+def _show_pw_dialog():
+    """若有待執行動作，就顯示密碼對話框；驗證通過後執行並清理旗標。"""
+    action = st.session_state.get("pending_action")
+    if not action:
+        return
 
-    st.info(f"本次變更：刪除 {deleted_count} 筆、其餘為新增/修改。")
+    title = {
+        "delete_rows": "刪除資料需要管理密碼",
+        "archive_clear": "歸檔並清空需要管理密碼",
+        "clear_only": "清空資料需要管理密碼",
+    }.get(action, "需要管理密碼")
 
-    # 3) 保存按鈕：若有刪除，必須密碼
-    if st.button("💾 保存變更（需要時將驗證密碼）", key="full_save_btn"):
-        if deleted_count > 0:
-            flag = "auth_delete_rows"
-            st.session_state[flag] = st.session_state.get(flag, False)
-            if not st.session_state[flag]:
-                # 開啟對話框
-                if HAVE_DIALOG:
-                    ask_password_dialog(flag, "刪除資料需要管理密碼")
-                    st.stop()
-                else:
-                    st.warning("目前環境不支援對話框，請先在下方輸入管理密碼再按一次保存。")
-                    st.stop()
-        # 通過驗證或沒有刪除 → 寫回
+    # 用 st.dialog（新版）或 inline（舊版）
+    def render_inner():
+        pw = st.text_input("請輸入管理密碼", type="password", key="__admin_pw")
+        c1, c2 = st.columns(2)
+        if c1.button("確認"):
+            if pw == ADMIN_PASS:
+                # 執行動作
+                _exec_pending_action()
+                # 清理
+                st.session_state["pending_action"] = ""
+                st.session_state["pending_payload"] = {}
+                st.success("已完成。")
+                st.rerun()
+            else:
+                st.error("密碼錯誤")
+        if c2.button("取消"):
+            st.session_state["pending_action"] = ""
+            st.session_state["pending_payload"] = {}
+            st.rerun()
+
+    if HAVE_DIALOG:
+        @st.dialog(title)
+        def _dlg():
+            render_inner()
+        _dlg()
+    else:
+        st.warning(title)
+        render_inner()
+
+def _exec_pending_action():
+    """依 pending_action 執行實際工作。"""
+    action = st.session_state.get("pending_action")
+    payload = st.session_state.get("pending_payload") or {}
+
+    if action == "delete_rows":
+        edited = payload["edited_df"]
+        # 真正寫回
         st.session_state.events = edited
-        save_events_to_sheet(sh, edited)  # 會連同 idempotency_key 一起保存
-        # 重置刪除驗證旗標
-        st.session_state["auth_delete_rows"] = False
-        st.success("✅ 已保存變更。")
+        save_events_to_sheet(sh, edited)
 
-    # === 底部三顆按鈕 ===
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.download_button(
-            "⬇️ 下載 CSV（匯出）",
-            data=(st.session_state.events).to_csv(index=False, encoding="utf-8-sig"),
-            file_name="events_export.csv",
-            mime="text/csv",
-            key="full_download_btn",
+    elif action == "archive_clear":
+        backup_title = payload["backup_title"]
+        ws_backup = get_or_create_ws(sh, backup_title, EVENT_COLS)
+        df_to_ws(ws_backup, st.session_state.events, EVENT_COLS)
+        st.session_state.events = st.session_state.events.iloc[0:0]
+        save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
+
+    elif action == "clear_only":
+        st.session_state.events = st.session_state.events.iloc[0:0]
+        save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
+
+def _count_deleted_rows(before_df: pd.DataFrame, after_df: pd.DataFrame) -> int:
+    """用 idempotency_key 判斷刪除；若沒有就用四欄組合鍵。更穩。"""
+    def keyset(df: pd.DataFrame) -> set[str]:
+        if "idempotency_key" in df.columns and df["idempotency_key"].astype(str).str.len().gt(0).any():
+            return set(df["idempotency_key"].astype(str))
+        combo = (
+            df["date"].astype(str) + "|" +
+            df["title"].astype(str) + "|" +
+            df["category"].astype(str) + "|" +
+            df["participant"].astype(str)
         )
-    with c2:
-        st.markdown("**🗄️ 歸檔並清空（建立新工作表備份）**")
-        if st.button("執行歸檔並清空", key="full_archive_btn"):
-            flag = "auth_archive_clear"
-            st.session_state[flag] = st.session_state.get(flag, False)
-            if not st.session_state[flag]:
-                if HAVE_DIALOG:
-                    ask_password_dialog(flag, "歸檔並清空需要管理密碼")
-                    st.stop()
-                else:
-                    st.warning("目前環境不支援對話框，請先在下方輸入管理密碼，再按一次。")
-                    st.stop()
-            # 通過驗證 → 執行
-            backup_title = f"events_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            ws_backup = get_or_create_ws(sh, backup_title, EVENT_COLS)
-            df_to_ws(ws_backup, st.session_state.events, EVENT_COLS)
-            st.session_state.events = st.session_state.events.iloc[0:0]
-            save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
-            st.session_state[flag] = False
-            st.success(f"✅ 已備份到工作表：{backup_title} 並清空。")
-
-    with c3:
-        st.markdown("**♻️ 只清空（不備份）**")
-        if st.button("執行只清空", key="full_clear_btn"):
-            flag = "auth_clear_only"
-            st.session_state[flag] = st.session_state.get(flag, False)
-            if not st.session_state[flag]:
-                if HAVE_DIALOG:
-                    ask_password_dialog(flag, "清空資料需要管理密碼")
-                    st.stop()
-                else:
-                    st.warning("目前環境不支援對話框，請先在下方輸入管理密碼，再按一次。")
-                    st.stop()
-            st.session_state.events = st.session_state.events.iloc[0:0]
-            save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
-            st.session_state[flag] = False
-            st.success("✅ 已清空所有資料（未備份）。")
+        return set(combo)
+    return len(keyset(before_df) - keyset(after_df))
 
 
 
@@ -875,3 +931,7 @@ with tabs[5]:
                 ws_snap = get_or_create_ws(sh, snap_title, list(summary.columns))
                 df_to_ws(ws_snap, summary, list(summary.columns))
                 st.success(f"已建立快照：{snap_title}")
+
+# 若有待執行動作，顯示密碼對話框
+_show_pw_dialog()
+
