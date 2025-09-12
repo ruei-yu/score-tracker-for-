@@ -12,6 +12,28 @@ import time, random
 import io, qrcode
 from urllib.parse import urlsplit, urlunsplit, quote, quote_plus
 
+import io
+import pandas as pd
+
+def df_to_excel_bytes(df: pd.DataFrame, sheet_name="Sheet1") -> bytes:
+    # 優先用 openpyxl，沒有就改用 xlsxwriter
+    engine = None
+    try:
+        import openpyxl  # noqa
+        engine = "openpyxl"
+    except Exception:
+        try:
+            import xlsxwriter  # noqa
+            engine = "xlsxwriter"
+        except Exception:
+            # 兩個都沒有就明確報錯
+            raise RuntimeError("需要 openpyxl 或 xlsxwriter 其中之一，請在 requirements.txt 安裝其中一個")
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine=engine) as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+    return buf.getvalue()
+
 
 def _sanitize_url(url: str) -> str:
     u = (url or "").strip()
