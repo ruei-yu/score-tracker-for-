@@ -332,13 +332,8 @@ def load_event_keyset(sh) -> set:
     return set([r[0] for r in vals[1:] if r and r[0]])
 
 def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *, max_retries: int = 5) -> str:
-    """
-    逐筆送到 Apps Script Web App。
-    期望 GAS 回傳 JSON：{"status":"OK|DUP|ERR", "message":"..."}
-    回傳：'OK'（成功）、'DUP'（重複）、'ERR'（失敗或逾時）
-    """
     if not AS_URL:
-        return "ERR"
+        return "ERR: NO_URL"
 
     payload = {
         "date": date_str,
@@ -348,31 +343,29 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
         "idempotency_key": make_idempotency_key(name, title, category, date_str),
     }
 
+    last_err = ""
     for i in range(max_retries):
         try:
             r = requests.post(AS_URL, json=payload, timeout=12)
-
-            # 優先解析 JSON
+            # 先試 JSON
             try:
                 data = r.json()
                 status = (data.get("status") or "").upper()
-                if status in ("OK", "DUP", "ERR"):
+                msg = data.get("message", "")
+                if status in ("OK", "DUP"):
                     return status
+                if status == "ERR":
+                    return f"ERR: {msg}"
+                # 未預期格式
+                last_err = f"HTTP {r.status_code} JSON={data}"
             except Exception:
-                # 回退：用純文字內容判斷（相容你之前的字串回覆）
-                t = (r.text or "").strip().upper()
-                if t in ("OK", "DUP"):
-                    return t
-                if t.startswith("ERR"):
-                    return "ERR"
+                last_err = f"HTTP {r.status_code} TEXT={r.text[:200]}"
+        except Exception as e:
+            last_err = f"EXC {e}"
 
-        except Exception:
-            pass
+        time.sleep(min(2**i, 8) + random.random() * 0.3)
 
-        # 退避重試
-        time.sleep(min(2 ** i, 8) + random.random() * 0.3)
-
-    return "ERR"
+    return f"ERR: {last_err or 'unknown'}"
     
 def append_events_rows(sh, rows: list[dict]):
     """統一入口：優先用 API；沒有 API 時退回直接寫表（含冪等鍵與索引維護）"""
