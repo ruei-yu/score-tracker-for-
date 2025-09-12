@@ -804,10 +804,17 @@ with tabs[2]:
             st.dataframe(show_df[["participant","title","category"]]
                          .sort_values(["category","participant"]),
                          use_container_width=True, height=300)
-            st.download_button("⬇️ 下載當日明細 Excel（匯出）",
-                               data=show_df.to_xlsx(index=False, encoding="utf-8-sig"),
-                               file_name=f"events_{sel_date_str}.xlsx", mime="text/xlsx",
-                               key="bydate_download_btn")
+            buf_bydate = io.BytesIO()
+            with pd.ExcelWriter(buf_bydate, engine="openpyxl") as writer:
+                show_df.to_excel(writer, index=False, sheet_name="events")
+            st.download_button(
+                "⬇️ 下載當日明細 Excel（匯出）",
+                data=buf_bydate.getvalue(),
+                file_name=f"events_{sel_date_str}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="bydate_download_btn",
+            )
+
 
 # -------- 3) 個人明細 --------
 with tabs[3]:
@@ -828,10 +835,17 @@ with tabs[3]:
             dfp = dfp[dfp["category"].isin(only_cat)]
         st.dataframe(dfp[["date","title","category"]].sort_values("date"),
                      use_container_width=True, height=350)
-        st.download_button("⬇️ 下載此人明細 Excel（匯出）",
-                           data=dfp.to_xlsx(index=False, encoding="utf-8-sig"),
-                           file_name=f"{person}_records.xlsx", mime="text/xlsx",
-                           key="detail_download_btn")
+        buf_detail = io.BytesIO()
+        with pd.ExcelWriter(buf_detail, engine="openpyxl") as writer:
+            dfp.to_excel(writer, index=False, sheet_name="records")
+        st.download_button(
+            "⬇️ 下載此人明細 Excel（匯出）",
+            data=buf_detail.getvalue(),
+            file_name=f"{person}_records.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="detail_download_btn",
+        )
+
 
 # === 管理密碼（可放到 secrets: [app].admin_password） ===
 ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "") or "0906"
@@ -972,13 +986,17 @@ with tabs[4]:
     # 下載鈕
     c1, c2, c3 = st.columns(3)
     with c1:
+        buf_full = io.BytesIO()
+        with pd.ExcelWriter(buf_full, engine="openpyxl") as writer:
+            st.session_state.events.to_excel(writer, index=False, sheet_name="events")
         st.download_button(
             "⬇️ 下載 Excel（匯出）",
-            data=(st.session_state.events).to_xlsx(index=False, encoding="utf-8-sig"),
+            data=buf_full.getvalue(),
             file_name="events_export.xlsx",
-            mime="text/xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="full_download_btn",
         )
+
 
     # 歸檔並清空（先要求密碼）
     with c2:
@@ -1006,13 +1024,17 @@ with tabs[5]:
     else:
         c1, c2, c3 = st.columns(3)
         with c1:
+            buf_lb = io.BytesIO()
+            with pd.ExcelWriter(buf_lb, engine="openpyxl") as writer:
+                summary.to_excel(writer, index=False, sheet_name="leaderboard")
             st.download_button(
                 "⬇️ 下載排行榜 Excel",
-                data=output.getvalue(),
+                data=buf_lb.getvalue(),
                 file_name="leaderboard.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="leaderboard_download_excel_btn",
             )
+
 
         with c2:
             if st.button("📤 匯出排行榜到 Google Sheet（leaderboard）", key="leaderboard_export_btn"):
