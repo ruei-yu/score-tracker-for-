@@ -747,22 +747,22 @@ with tabs[0]:
     else:
         st.info("請貼上你的 .streamlit.app 根網址（本頁網址）。")
 
-import io
-
-with st.expander("🔎 目前所有短代碼一覽", expanded=False):
-    st.dataframe(links_df.sort_values("date", ascending=False),
-                 use_container_width=True, height=220)
-    st.download_button(
-        "⬇️ 下載連結代碼 Excel（匯出）",
-        data=df_to_excel_bytes(links_df, "links"),
-        file_name="links.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="links_download_excel_btn",
-    )
-    if st.button("🧹 清空所有短代碼（links）", key="links_clear_btn"):
-        st.session_state.links = st.session_state.links.iloc[0:0]
-        save_links_to_sheet(sh, st.session_state.links)
-        st.success("已清空所有短代碼。")
+    import io
+    
+    with st.expander("🔎 目前所有短代碼一覽", expanded=False):
+        st.dataframe(links_df.sort_values("date", ascending=False),
+                     use_container_width=True, height=220)
+        st.download_button(
+            "⬇️ 下載連結代碼 Excel（匯出）",
+            data=df_to_excel_bytes(links_df, "links"),
+            file_name="links.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="links_download_excel_btn",
+        )
+        if st.button("🧹 清空所有短代碼（links）", key="links_clear_btn"):
+            st.session_state.links = st.session_state.links.iloc[0:0]
+            save_links_to_sheet(sh, st.session_state.links)
+            st.success("已清空所有短代碼。")
 
 # -------- 1) 現場報到 --------
 with tabs[1]:
