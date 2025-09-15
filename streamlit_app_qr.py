@@ -230,8 +230,7 @@ ADMIN_PASS = _get_admin_pass()
 def _check_pw(pw_input: str) -> bool:
     # 用常數時間比較，避免時序側通道
     return bool(ADMIN_PASS) and hmac.compare_digest(str(pw_input), str(ADMIN_PASS))
-ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "")
-
+    
 # === 是否有 st.dialog（舊版 Streamlit 沒有）===
 try:
     HAVE_DIALOG = hasattr(st, "dialog")
@@ -832,9 +831,6 @@ with tabs[2]:
             st.dataframe(show_df[["participant","title","category"]]
                          .sort_values(["category","participant"]),
                          use_container_width=True, height=300)
-            buf_bydate = io.BytesIO()
-            with pd.ExcelWriter(buf_bydate, engine="openpyxl") as writer:
-                show_df.to_excel(writer, index=False, sheet_name="events")
             st.download_button(
                 "⬇️ 下載當日明細 Excel（匯出）",
                 data=df_to_excel_bytes(show_df, "events"),
@@ -842,6 +838,7 @@ with tabs[2]:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="bydate_download_btn",
             )
+
 
 
 
@@ -864,9 +861,6 @@ with tabs[3]:
             dfp = dfp[dfp["category"].isin(only_cat)]
         st.dataframe(dfp[["date","title","category"]].sort_values("date"),
                      use_container_width=True, height=350)
-        buf_detail = io.BytesIO()
-        with pd.ExcelWriter(buf_detail, engine="openpyxl") as writer:
-            dfp.to_excel(writer, index=False, sheet_name="records")
         st.download_button(
             "⬇️ 下載此人明細 Excel（匯出）",
             data=df_to_excel_bytes(dfp, "records"),
@@ -874,6 +868,7 @@ with tabs[3]:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="detail_download_btn",
         )
+
 
 # === 管理密碼（可放到 secrets: [app].admin_password） ===
 import os, hmac
@@ -890,20 +885,7 @@ ADMIN_PASS = _get_admin_pass()
 def _check_pw(pw_input: str) -> bool:
     # 用常數時間比較，避免時序側通道
     return bool(ADMIN_PASS) and hmac.compare_digest(str(pw_input), str(ADMIN_PASS))
-ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "")
-
-# === 是否有 st.dialog（舊版 Streamlit 沒有）===
-try:
-    HAVE_DIALOG = hasattr(st, "dialog")
-except Exception:
-    HAVE_DIALOG = False
-
-def _need_pw(action_key: str, payload: dict | None = None):
-    """要求密碼：把動作與負載存入 session_state，觸發重新渲染去顯示對話框。"""
-    st.session_state["pending_action"] = action_key
-    st.session_state["pending_payload"] = payload or {}
-    st.rerun()
-
+    
 def _show_pw_dialog():
     """若有待執行動作，就顯示密碼對話框；驗證通過後執行並清理旗標。"""
     action = st.session_state.get("pending_action")
@@ -921,7 +903,7 @@ def _show_pw_dialog():
         pw = st.text_input("請輸入管理密碼", type="password", key="__admin_pw")
         c1, c2 = st.columns(2)
         if c1.button("確認"):
-            if pw == ADMIN_PASS:
+            if _check_pw(pw):
                 # 執行動作
                 _exec_pending_action()
                 # 清理
