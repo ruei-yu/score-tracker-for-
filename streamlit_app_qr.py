@@ -216,6 +216,20 @@ def df_to_ws(ws, df: pd.DataFrame, expected_cols: list[str]):
     safe_write_ws(ws, df, expected_cols, allow_clear=True)
 
 # === 管理密碼（可放到 secrets: [app].admin_password） ===
+import os, hmac
+
+def _get_admin_pass() -> str:
+    # 只從 Secrets 或環境變數讀，沒有就回空字串（代表未設定）
+    return (
+        st.secrets.get("app", {}).get("admin_password")
+        or os.getenv("ADMIN_PASSWORD", "")
+    )
+
+ADMIN_PASS = _get_admin_pass()
+
+def _check_pw(pw_input: str) -> bool:
+    # 用常數時間比較，避免時序側通道
+    return bool(ADMIN_PASS) and hmac.compare_digest(str(pw_input), str(ADMIN_PASS))
 ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "")
 
 # === 是否有 st.dialog（舊版 Streamlit 沒有）===
@@ -862,6 +876,20 @@ with tabs[3]:
         )
 
 # === 管理密碼（可放到 secrets: [app].admin_password） ===
+import os, hmac
+
+def _get_admin_pass() -> str:
+    # 只從 Secrets 或環境變數讀，沒有就回空字串（代表未設定）
+    return (
+        st.secrets.get("app", {}).get("admin_password")
+        or os.getenv("ADMIN_PASSWORD", "")
+    )
+
+ADMIN_PASS = _get_admin_pass()
+
+def _check_pw(pw_input: str) -> bool:
+    # 用常數時間比較，避免時序側通道
+    return bool(ADMIN_PASS) and hmac.compare_digest(str(pw_input), str(ADMIN_PASS))
 ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "")
 
 # === 是否有 st.dialog（舊版 Streamlit 沒有）===
