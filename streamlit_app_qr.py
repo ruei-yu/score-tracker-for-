@@ -216,7 +216,7 @@ def df_to_ws(ws, df: pd.DataFrame, expected_cols: list[str]):
     safe_write_ws(ws, df, expected_cols, allow_clear=True)
 
 # === 管理密碼（可放到 secrets: [app].admin_password） ===
-ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "") or "0906"
+ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "")
 
 # === 是否有 st.dialog（舊版 Streamlit 沒有）===
 try:
@@ -862,7 +862,7 @@ with tabs[3]:
         )
 
 # === 管理密碼（可放到 secrets: [app].admin_password） ===
-ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "") or "0906"
+ADMIN_PASS = st.secrets.get("app", {}).get("admin_password", "")
 
 # === 是否有 st.dialog（舊版 Streamlit 沒有）===
 try:
