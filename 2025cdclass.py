@@ -333,6 +333,15 @@ def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
 def _is_blank_row(row) -> bool:
     """四個主鍵欄位全空，視為『空列』"""
     return all((str(row.get(c, "")).strip() == "") for c in KEY_COLS)
+# ---------- 保證事件欄位齊全（避免缺欄造成 KeyError） ----------
+def _ensure_event_cols(df: pd.DataFrame) -> pd.DataFrame:
+    need = ["date","title","category","participant","idempotency_key"]
+    out = df.copy()
+    for c in need:
+        if c not in out.columns:
+            out[c] = ""
+    # 不強制欄位順序，避免破壞使用者編輯中的暫存；計算時會各自取用
+    return out
 
 
 # ---------- 新增：穩定寫入（append + 退避重試） ----------
@@ -972,10 +981,13 @@ with tabs[4]:
     edited_norm = _normalize_df(edited)
     edited_nonblank = edited_norm[~edited_norm.apply(_is_blank_row, axis=1)].reset_index(drop=True)
 
-    # 計算刪除筆數（包含真的刪列，及「清空成空列」的情況）
+        # 計算刪除筆數（包含真的刪列，及「清空成空列」的情況）
     def _keyset(df: pd.DataFrame) -> set[str]:
-        if "idempotency_key" in df.columns and df["idempotency_key"].astype(str).str.len().gt(0).any():
+        df = _ensure_event_cols(df)
+        # 若有有效 idempotency_key，直接用它
+        if df["idempotency_key"].astype(str).str.len().gt(0).any():
             return set(df["idempotency_key"].astype(str))
+        # 否則用四欄組合鍵（就算欄位原本缺，_ensure_event_cols 已補空字串）
         combo = (
             df["date"].astype(str) + "|" +
             df["title"].astype(str) + "|" +
@@ -984,7 +996,11 @@ with tabs[4]:
         )
         return set(combo)
 
-    deleted_count = len(_keyset(original_df) - _keyset(edited_nonblank))
+    # 保險：計算前先補齊缺欄
+    original_df_safe = _ensure_event_cols(original_df)
+    edited_nonblank_safe = _ensure_event_cols(edited_nonblank)
+
+    deleted_count = len(_keyset(original_df_safe) - _keyset(edited_nonblank_safe))
     st.info(f"本次變更偵測到：刪除 {deleted_count} 筆（若為 0 代表只有新增/修改，還需要按下保存變更，才可輸入密碼）。")
 
     # 保存變更：只在這個按鈕被按時才會寫回
