@@ -1,6 +1,6 @@
 # --- 頁面設定 ---
 import streamlit as st
-st.set_page_config(page_title="護持活動集點(for幹部)", page_icon="🔢", layout="wide")
+st.set_page_config(page_title="2025崇慧崇德班集點", page_icon="🔢", layout="wide")
 import requests
 import pandas as pd
 import json, io, hashlib, re
@@ -631,7 +631,7 @@ if mode == "checkin":
     st.stop()
 
 # ================= Admin UI =================
-st.title("🔢護持活動集點(for幹部)")
+st.title("🔢2025崇慧崇德班集點")
 
 # Sidebar settings（用 Google Sheet 而不是檔案路徑）
 st.sidebar.title("⚙️ 設定（Google Sheet）")
