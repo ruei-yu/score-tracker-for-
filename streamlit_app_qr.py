@@ -644,6 +644,8 @@ WRITE_MODE = st.sidebar.radio(
     help="大量同秒報到時，建議用後端 API（Apps Script）避免撞限額。",
     key="write_mode_radio",
 )
+if not ADMIN_PASS: 
+    st.sidebar.warning("尚未設定管理密碼（app.admin_password 或環境變數 ADMIN_PASSWORD）。")
 
 def api_healthcheck() -> str:
     if not AS_URL:
@@ -868,23 +870,6 @@ with tabs[3]:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="detail_download_btn",
         )
-
-
-# === 管理密碼（可放到 secrets: [app].admin_password） ===
-import os, hmac
-
-def _get_admin_pass() -> str:
-    # 只從 Secrets 或環境變數讀，沒有就回空字串（代表未設定）
-    return (
-        st.secrets.get("app", {}).get("admin_password")
-        or os.getenv("ADMIN_PASSWORD", "")
-    )
-
-ADMIN_PASS = _get_admin_pass()
-
-def _check_pw(pw_input: str) -> bool:
-    # 用常數時間比較，避免時序側通道
-    return bool(ADMIN_PASS) and hmac.compare_digest(str(pw_input), str(ADMIN_PASS))
     
 def _show_pw_dialog():
     """若有待執行動作，就顯示密碼對話框；驗證通過後執行並清理旗標。"""
@@ -1010,9 +995,6 @@ with tabs[4]:
     # 下載鈕
     c1, c2, c3 = st.columns(3)
     with c1:
-        buf_full = io.BytesIO()
-        with pd.ExcelWriter(buf_full, engine="openpyxl") as writer:
-            st.session_state.events.to_excel(writer, index=False, sheet_name="events")
         st.download_button(
             "⬇️ 下載 Excel（匯出）",
             data=df_to_excel_bytes(st.session_state.events, "events"),
@@ -1049,9 +1031,6 @@ with tabs[5]:
     else:
         c1, c2, c3 = st.columns(3)
         with c1:
-            buf_lb = io.BytesIO()
-            with pd.ExcelWriter(buf_lb, engine="openpyxl") as writer:
-                summary.to_excel(writer, index=False, sheet_name="leaderboard")
             st.download_button(
                 "⬇️ 下載排行榜 Excel",
                 data=df_to_excel_bytes(summary, "leaderboard"),
