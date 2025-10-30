@@ -846,6 +846,69 @@ with tabs[2]:
 
         # --- 佈局：左側日曆 + 右側 Legend ---
         c1, c2 = st.columns([3, 1])
+        with c1:
+            html = "<table style='border-collapse: collapse; width:100%; text-align:center;'>"
+            html += f"<tr><th colspan='7' style='font-size:20px;padding:8px;'>{calendar.month_name[month]} {year}</th></tr>"
+            html += "<tr>" + "".join([f"<th>{d}</th>" for d in ['Su','Mo','Tu','We','Th','Fr','Sa']]) + "</tr>"
+
+            for week in cal:
+                html += "<tr>"
+                for day in week:
+                    if day == 0:
+                        html += "<td style='padding:8px;border:1px solid #333;'></td>"
+                    else:
+                        day_date = date(year, month, day)
+                        day_events = events_df[events_df["date"] == day_date]
+                        dots = ""
+                        for cat in sorted(day_events["category"].unique()):
+                            if cat in color_map:
+                                dots += f"<div style='width:6px;height:6px;border-radius:50%;background:{color_map[cat]};display:inline-block;margin:1px;'></div>"
+                        html += f"<td style='padding:4px;border:1px solid #333;'>{day}<br>{dots}</td>"
+                html += "</tr>"
+            html += "</table>"
+            st.markdown(html, unsafe_allow_html=True)
+
+        # Legend 區塊
+        with c2:
+            st.markdown("### 🟢 類別圖例")
+            legend_html = ""
+            for cat, col in color_map.items():
+                legend_html += f"<div style='margin:2px 0;'><span style='display:inline-block;width:10px;height:10px;border-radius:50%;background:{col};margin-right:6px;'></span>{cat}</div>"
+            st.markdown(legend_html, unsafe_allow_html=True)
+
+        # --- 日期選擇器 + 詳細紀錄 ---
+        sel_date = st.date_input("選擇日期", value=today, key="bydate_date_picker")
+        sel_date_str = sel_date.isoformat()
+
+        day_df = events_df[events_df["date"].astype(str) == sel_date_str][["date","title","category","participant"]]
+        if day_df.empty:
+            st.info(f"{sel_date_str} 沒有任何紀錄。")
+        else:
+            cat_options = sorted(day_df["category"].astype(str).unique())
+            sel_cats = st.multiselect(
+                "篩選類別（可多選）",
+                options=cat_options,
+                default=cat_options,
+                key="bydate_cats_multiselect"
+            )
+
+            show_df = day_df[day_df["category"].isin(sel_cats)].copy()
+            names = sorted(show_df["participant"].astype(str).unique())
+            st.write(f"**共 {len(names)} 人**：", "、".join(names) if names else "（無）")
+
+            st.dataframe(
+                show_df[["participant","title","category"]].sort_values(["category","participant"]),
+                use_container_width=True,
+                height=300
+            )
+
+            st.download_button(
+                "⬇️ 下載當日明細 Excel（匯出）",
+                data=df_to_excel_bytes(show_df, "events"),
+                file_name=f"events_{sel_date_str}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="bydate_download_btn",
+            )
 
 # -------- 3) 個人明細 --------
 with tabs[3]:
