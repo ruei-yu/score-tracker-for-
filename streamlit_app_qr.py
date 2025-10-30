@@ -870,7 +870,7 @@ with tabs[2]:
 
         # Legend 區塊
         with c2:
-            st.markdown("<div style='font-size:16px; font-weight:600;'>📌 類別圖例</div>", unsafe_allow_html=True)
+            st.markdown("<div style='font-size:16px; font-weight:600;'>📌 類別</div>", unsafe_allow_html=True)
             legend_html = ""
             for cat, col in color_map.items():
                 legend_html += f"<div style='margin:2px 0;'><span style='display:inline-block;width:7px;height:10px;border-radius:50%;background:{col};margin-right:6px;'></span>{cat}</div>"
