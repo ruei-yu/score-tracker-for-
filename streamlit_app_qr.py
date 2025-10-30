@@ -812,27 +812,87 @@ with tabs[1]:
 
 # -------- 2) 依日期查看參與者 --------
 with tabs[2]:
-    st.subheader("依日期查看參與者")
+    st.subheader("📆 依日期查看參與者")
+
+    # 活動顏色對照表
+    color_map = {
+        "上研究班 (新民、至善)": "#1565C0",
+        "活動護持 (含宿訪)": "#26A69A",
+        "參與獻供": "#FBC02D",
+        "參與晨讀": "#8BC34A",
+        "參與辦道": "#8E24AA",
+        "參與讀書會/ 與學長姐有約": "#29B6F6",
+        "法會護持一天": "#FB8C00",
+        "參與成全/道務會議": "#E53935",
+        "背誦經典": "#546E7A",
+        "練講": "#EC407A",
+        "帶人求道": "#C0CA33",
+        "帶人開法會": "#C62828",
+        "帶人進研究班": "#2E7D32",
+    }
+
     if st.session_state.events.empty:
         st.info("目前尚無活動紀錄。")
     else:
-        sel_date = st.date_input("選擇日期", value=date.today(), key="bydate_date_picker")
+        import calendar
+        from datetime import date
+
+        events_df = st.session_state.events.copy()
+        events_df["date"] = pd.to_datetime(events_df["date"], errors="coerce").dt.date
+
+        today = date.today()
+        year, month = today.year, today.month
+        cal = calendar.monthcalendar(year, month)
+
+        # 組出 HTML 月曆
+        html = "<table style='border-collapse: collapse; width:100%; text-align:center;'>"
+        html += f"<tr><th colspan='7' style='font-size:20px;padding:8px;'>{calendar.month_name[month]} {year}</th></tr>"
+        html += "<tr>" + "".join([f"<th>{d}</th>" for d in ['Su','Mo','Tu','We','Th','Fr','Sa']]) + "</tr>"
+
+        for week in cal:
+            html += "<tr>"
+            for day in week:
+                if day == 0:
+                    html += "<td style='padding:8px;border:1px solid #ccc;'></td>"
+                else:
+                    day_date = date(year, month, day)
+                    day_events = events_df[events_df["date"] == day_date]
+                    dots = ""
+                    for cat in sorted(day_events["category"].unique()):
+                        if cat in color_map:
+                            dots += f"<div style='width:8px;height:8px;border-radius:50%;background:{color_map[cat]};display:inline-block;margin:1px;'></div>"
+                    html += f"<td style='padding:6px;border:1px solid #ccc;'>{day}<br>{dots}</td>"
+            html += "</tr>"
+        html += "</table>"
+
+        st.markdown(html, unsafe_allow_html=True)
+
+        # 日期選擇器（保持原功能）
+        sel_date = st.date_input("選擇日期", value=today, key="bydate_date_picker")
         sel_date_str = sel_date.isoformat()
-        # 顯示時只取前四欄（隱藏 id）
-        day_df = st.session_state.events[st.session_state.events["date"].astype(str) == sel_date_str][["date","title","category","participant"]].copy()
+
+        day_df = events_df[events_df["date"].astype(str) == sel_date_str][["date","title","category","participant"]]
         if day_df.empty:
             st.info(f"{sel_date_str} 沒有任何紀錄。")
         else:
             cat_options = sorted(day_df["category"].astype(str).unique())
-            sel_cats = st.multiselect("篩選類別（可多選）",
-                                      options=cat_options, default=cat_options,
-                                      key="bydate_cats_multiselect")
+            sel_cats = st.multiselect(
+                "篩選類別（可多選）",
+                options=cat_options,
+                default=cat_options,
+                key="bydate_cats_multiselect"
+            )
+
             show_df = day_df[day_df["category"].isin(sel_cats)].copy()
             names = sorted(show_df["participant"].astype(str).unique())
             st.write(f"**共 {len(names)} 人**：", "、".join(names) if names else "（無）")
-            st.dataframe(show_df[["participant","title","category"]]
-                         .sort_values(["category","participant"]),
-                         use_container_width=True, height=300)
+
+            st.dataframe(
+                show_df[["participant","title","category"]].sort_values(["category","participant"]),
+                use_container_width=True,
+                height=300
+            )
+
             st.download_button(
                 "⬇️ 下載當日明細 Excel（匯出）",
                 data=df_to_excel_bytes(show_df, "events"),
@@ -840,9 +900,6 @@ with tabs[2]:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="bydate_download_btn",
             )
-
-
-
 
 # -------- 3) 個人明細 --------
 with tabs[3]:
