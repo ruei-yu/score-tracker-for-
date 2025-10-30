@@ -839,6 +839,12 @@ with tabs[2]:
 
         events_df = st.session_state.events.copy()
         events_df["date"] = pd.to_datetime(events_df["date"], errors="coerce").dt.date
+        events_df["category"] = (
+            events_df["category"].astype(str)
+            .str.strip()        # 去除首尾空白
+            .str.replace("　", "")  # 移除全形空白
+        )
+
 
         today = date.today()
         year, month = today.year, today.month
