@@ -866,10 +866,11 @@ with tabs[2]:
                         day_date = date(year, month, day)
                         day_events = events_df[events_df["date"] == day_date]
                         dots = ""
-                        for cat in sorted(day_events["category"].unique()):
+                        for _, row in day_events.iterrows():
+                            cat = row["category"]
                             if cat in color_map:
                                 dots += f"<div style='width:6px;height:6px;border-radius:50%;background:{color_map[cat]};display:inline-block;margin:1px;'></div>"
-                        html += f"<td style='padding:4px;border:1px solid #333;'>{day}<br>{dots}</td>"
+
                 html += "</tr>"
             html += "</table>"
             st.markdown(html, unsafe_allow_html=True)
