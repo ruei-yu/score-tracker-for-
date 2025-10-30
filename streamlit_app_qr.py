@@ -817,7 +817,7 @@ with tabs[2]:
     import calendar, re
     from datetime import date
 
-    # 類別顏色對照表
+    # === 顏色對照表 ===
     color_map = {
         "上研究班 (新民、至善)": "#1565C0",
         "活動護持 (含宿訪)": "#26A69A",
@@ -834,7 +834,7 @@ with tabs[2]:
         "帶人進研究班": "#2E7D32",
     }
 
-    # --- 類別正規化函式 ---
+    # === 正規化類別 ===
     def canon_cat(s: str) -> str:
         s = str(s or "").strip()
         s = s.replace("（", "(").replace("）", ")").replace("／", "/").replace("　", " ")
@@ -844,31 +844,33 @@ with tabs[2]:
         s = s.replace("活動護持(含宿訪)", "活動護持 (含宿訪)")
         return s
 
-    # 建立 canonical 對照表
     color_map_canon = {canon_cat(k): v for k, v in color_map.items()}
     label_map_canon = {canon_cat(k): k for k in color_map.keys()}
 
     if st.session_state.events.empty:
         st.info("目前尚無活動紀錄。")
     else:
-        # 正規化資料
         events_df = st.session_state.events.copy()
         events_df["date"] = pd.to_datetime(events_df["date"], errors="coerce").dt.date
         events_df["cat_norm"] = events_df["category"].map(canon_cat)
 
         today = date.today()
         year, month = today.year, today.month
-        cal = calendar.monthcalendar(year, month)
 
-        # --- 佈局：左側日曆 + 右側 Legend ---
+        # === 使用 calendar.TextCalendar 動態週開頭 ===
+        cal = calendar.TextCalendar(firstweekday=calendar.SUNDAY)
+        month_weeks = cal.monthdayscalendar(year, month)
+        weekday_labels = [calendar.day_abbr[(i + cal.getfirstweekday()) % 7] for i in range(7)]
+
+        # === 版面配置 ===
         c1, c2 = st.columns([3, 1])
         with c1:
             html = "<table style='border-collapse: collapse; width:100%; text-align:center;'>"
             html += f"<tr><th colspan='7' style='font-size:20px;padding:8px;'>{calendar.month_name[month]} {year}</th></tr>"
-            html += "<tr>" + "".join([f"<th>{d}</th>" for d in ['Su','Mo','Tu','We','Th','Fr','Sa']]) + "</tr>"
+            html += "<tr>" + "".join([f"<th>{d}</th>" for d in weekday_labels]) + "</tr>"
 
             dots_size = 6
-            for week in cal:
+            for week in month_weeks:
                 html += "<tr>"
                 for day in week:
                     if day == 0:
@@ -890,7 +892,7 @@ with tabs[2]:
             html += "</table>"
             st.markdown(html, unsafe_allow_html=True)
 
-        # Legend 區塊
+        # === Legend ===
         with c2:
             st.markdown("<div style='font-size:16px; font-weight:600;'>📌 類別</div>", unsafe_allow_html=True)
             legend_html = ""
@@ -902,11 +904,11 @@ with tabs[2]:
                 )
             st.markdown(legend_html, unsafe_allow_html=True)
 
-        # --- 日期選擇器 + 詳細紀錄 ---
+        # === 日期選擇 + 詳細紀錄 ===
         sel_date = st.date_input("選擇日期", value=today, key="bydate_date_picker")
         sel_date_str = sel_date.isoformat()
-
         day_df = events_df[events_df["date"].astype(str) == sel_date_str][["date","title","category","participant"]]
+
         if day_df.empty:
             st.info(f"{sel_date_str} 沒有任何紀錄。")
         else:
@@ -935,7 +937,6 @@ with tabs[2]:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="bydate_download_btn",
             )
-
 
 # -------- 3) 個人明細 --------
 with tabs[3]:
