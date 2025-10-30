@@ -814,6 +814,9 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("📆 依日期查看參與者")
 
+    import calendar, re
+    from datetime import date
+
     # 類別顏色對照表
     color_map = {
         "上研究班 (新民、至善)": "#1565C0",
@@ -831,20 +834,27 @@ with tabs[2]:
         "帶人進研究班": "#2E7D32",
     }
 
+    # --- 類別正規化函式 ---
+    def canon_cat(s: str) -> str:
+        s = str(s or "").strip()
+        s = s.replace("（", "(").replace("）", ")").replace("／", "/").replace("　", " ")
+        s = re.sub(r"\s+", " ", s)
+        s = s.replace(" /", "/").replace("/ ", "/")
+        s = s.replace("參與讀書會/ 與學長姐有約", "參與讀書會/與學長姐有約")
+        s = s.replace("活動護持(含宿訪)", "活動護持 (含宿訪)")
+        return s
+
+    # 建立 canonical 對照表
+    color_map_canon = {canon_cat(k): v for k, v in color_map.items()}
+    label_map_canon = {canon_cat(k): k for k in color_map.keys()}
+
     if st.session_state.events.empty:
         st.info("目前尚無活動紀錄。")
     else:
-        import calendar
-        from datetime import date
-
+        # 正規化資料
         events_df = st.session_state.events.copy()
         events_df["date"] = pd.to_datetime(events_df["date"], errors="coerce").dt.date
-        events_df["category"] = (
-            events_df["category"].astype(str)
-            .str.strip()        # 去除首尾空白
-            .str.replace("　", "")  # 移除全形空白
-        )
-
+        events_df["cat_norm"] = events_df["category"].map(canon_cat)
 
         today = date.today()
         year, month = today.year, today.month
@@ -857,6 +867,7 @@ with tabs[2]:
             html += f"<tr><th colspan='7' style='font-size:20px;padding:8px;'>{calendar.month_name[month]} {year}</th></tr>"
             html += "<tr>" + "".join([f"<th>{d}</th>" for d in ['Su','Mo','Tu','We','Th','Fr','Sa']]) + "</tr>"
 
+            dots_size = 6
             for week in cal:
                 html += "<tr>"
                 for day in week:
@@ -864,13 +875,17 @@ with tabs[2]:
                         html += "<td style='padding:8px;border:1px solid #333;'></td>"
                     else:
                         day_date = date(year, month, day)
-                        day_events = events_df[events_df["date"] == day_date]
+                        ddf = events_df[events_df["date"] == day_date]
                         dots = ""
-                        for _, row in day_events.iterrows():
-                            cat = row["category"]
-                            if cat in color_map:
-                                dots += f"<div style='width:6px;height:6px;border-radius:50%;background:{color_map[cat]};display:inline-block;margin:1px;'></div>"
-
+                        for cat_norm in sorted(ddf["cat_norm"].dropna().unique()):
+                            col = color_map_canon.get(cat_norm, "#9E9E9E")
+                            label = label_map_canon.get(cat_norm, cat_norm)
+                            dots += (
+                                f"<div title='{label}' "
+                                f"style='width:{dots_size}px;height:{dots_size}px;"
+                                f"border-radius:50%;background:{col};display:inline-block;margin:1px;'></div>"
+                            )
+                        html += f"<td style='padding:4px;border:1px solid #333;'>{day}<br>{dots}</td>"
                 html += "</tr>"
             html += "</table>"
             st.markdown(html, unsafe_allow_html=True)
@@ -880,7 +895,11 @@ with tabs[2]:
             st.markdown("<div style='font-size:16px; font-weight:600;'>📌 類別</div>", unsafe_allow_html=True)
             legend_html = ""
             for cat, col in color_map.items():
-                legend_html += f"<div style='margin:2px 0;'><span style='display:inline-block;width:7px;height:10px;border-radius:50%;background:{col};margin-right:6px;'></span>{cat}</div>"
+                legend_html += (
+                    f"<div style='margin:2px 0;'>"
+                    f"<span style='display:inline-block;width:7px;height:7px;"
+                    f"border-radius:50%;background:{col};margin-right:6px;'></span>{cat}</div>"
+                )
             st.markdown(legend_html, unsafe_allow_html=True)
 
         # --- 日期選擇器 + 詳細紀錄 ---
@@ -916,6 +935,7 @@ with tabs[2]:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="bydate_download_btn",
             )
+
 
 # -------- 3) 個人明細 --------
 with tabs[3]:
