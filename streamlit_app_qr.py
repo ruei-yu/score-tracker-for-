@@ -851,18 +851,20 @@ with tabs[2]:
         st.info("目前尚無活動紀錄。")
     else:
         events_df = st.session_state.events.copy()
+
+        # 統一日期格式（完全同步完整記錄）
+        events_df["date_str"] = pd.to_datetime(events_df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
         events_df["date"] = pd.to_datetime(events_df["date"], errors="coerce").dt.date
         events_df["cat_norm"] = events_df["category"].map(canon_cat)
 
         today = date.today()
         year, month = today.year, today.month
 
-        # === 使用 calendar.TextCalendar 動態週開頭 ===
         cal = calendar.TextCalendar(firstweekday=calendar.SUNDAY)
         month_weeks = cal.monthdayscalendar(year, month)
         weekday_labels = [calendar.day_abbr[(i + cal.getfirstweekday()) % 7] for i in range(7)]
 
-        # === 版面配置 ===
+        # === 佈局：左側日曆 + 右側 Legend ===
         c1, c2 = st.columns([3, 1])
         with c1:
             html = "<table style='border-collapse: collapse; width:100%; text-align:center;'>"
@@ -877,7 +879,8 @@ with tabs[2]:
                         html += "<td style='padding:8px;border:1px solid #333;'></td>"
                     else:
                         day_date = date(year, month, day)
-                        ddf = events_df[events_df["date"] == day_date]
+                        day_str = day_date.isoformat()  # 用 ISO 字串比對
+                        ddf = events_df[events_df["date_str"] == day_str]
                         dots = ""
                         for cat_norm in sorted(ddf["cat_norm"].dropna().unique()):
                             col = color_map_canon.get(cat_norm, "#9E9E9E")
@@ -907,7 +910,7 @@ with tabs[2]:
         # === 日期選擇 + 詳細紀錄 ===
         sel_date = st.date_input("選擇日期", value=today, key="bydate_date_picker")
         sel_date_str = sel_date.isoformat()
-        day_df = events_df[events_df["date"].astype(str) == sel_date_str][["date","title","category","participant"]]
+        day_df = events_df[events_df["date_str"] == sel_date_str][["date_str","title","category","participant"]]
 
         if day_df.empty:
             st.info(f"{sel_date_str} 沒有任何紀錄。")
@@ -937,6 +940,7 @@ with tabs[2]:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="bydate_download_btn",
             )
+
 
 # -------- 3) 個人明細 --------
 with tabs[3]:
