@@ -814,92 +814,121 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("📆 依日期查看參與者")
 
+    import calendar, re
+    from datetime import date
+
+    # === 顏色對照表 ===
     color_map = {
-        "帶人開法會": "#FF0000",
-        "法會護持一天": "#FF7F00",
-        "參與獻供": "#E6B800",
-        "活動護持 (含宿訪)": "#00C300",
-        "參與晨讀": "#00FFFF",
-        "參與讀書會/ 與學長姐有約": "#0066FF",
-        "上研究班 (新民、至善)": "#8A2BE2",
-        "參與辦道": "#FF1493",
-        "參與成全/道務會議": "#A0522D",
-        "帶人求道": "#FFFF66",
-        "帶人進研究班": "#BEBEBE",
-        "練講": "#F4A3A3",
-        "背誦經典": "#808080",
+        "帶人開法會": "#FF0000",      # 紅 - 熱烈明確
+        "法會護持一天": "#FF7F00",    # 橙 - 活力強
+        "參與獻供": "#E6B800",        # 暗金黃 - 穩重光澤
+        "活動護持 (含宿訪)": "#00C300",  # 綠 - 生機自然
+        "參與晨讀": "#00FFFF",        # 青藍 - 清新明亮
+        "參與讀書會/ 與學長姐有約": "#0066FF",  # 藍 - 專注穩重
+        "上研究班 (新民、至善)": "#8A2BE2",    # 紫羅蘭 - 智慧莊嚴
+        "參與辦道": "#FF1493",        # 桃紅 - 熱誠積極
+        "參與成全/道務會議": "#A0522D", # 棕 - 穩重奉獻
+        "帶人求道": "#FFFF66",        # 檸檬亮黃 - 成果榮耀
+        "帶人進研究班": "#BEBEBE",    # 石磨灰 - 柔和中性
+        "練講": "#F4A3A3",           # 紅鶴粉 - 溫潤柔和
+        "背誦經典": "#808080",        # 中灰 - 靜謐收尾
     }
+
+    # === 正規化類別 ===
+    def canon_cat(s: str) -> str:
+        s = str(s or "").strip()
+        s = s.replace("（", "(").replace("）", ")").replace("／", "/").replace("　", " ")
+        s = re.sub(r"\s+", " ", s)
+        s = s.replace(" /", "/").replace("/ ", "/")
+        s = s.replace("參與讀書會/ 與學長姐有約", "參與讀書會/與學長姐有約")
+        s = s.replace("活動護持(含宿訪)", "活動護持 (含宿訪)")
+        return s
+
+    color_map_canon = {canon_cat(k): v for k, v in color_map.items()}
+    label_map_canon = {canon_cat(k): k for k in color_map.keys()}
 
     if st.session_state.events.empty:
         st.info("目前尚無活動紀錄。")
     else:
-        import calendar
-        from datetime import date
-
         events_df = st.session_state.events.copy()
+        events_df["date_str"] = pd.to_datetime(events_df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
         events_df["date"] = pd.to_datetime(events_df["date"], errors="coerce").dt.date
-        events_df["category"] = events_df["category"].astype(str).str.strip().str.replace("　", "")
+        events_df["cat_norm"] = events_df["category"].map(canon_cat)
 
         # === 新增：年份與月份選擇 ===
+        today = date.today()
         coly, colm = st.columns(2)
         with coly:
-            year = st.number_input("年份", min_value=2020, max_value=2035, value=date.today().year, step=1)
+            year = st.number_input("年份", min_value=2020, max_value=2035, value=today.year, step=1)
         with colm:
-            month = st.number_input("月份", min_value=1, max_value=12, value=date.today().month, step=1)
+            month = st.number_input("月份", min_value=1, max_value=12, value=today.month, step=1)
 
-        cal = calendar.monthcalendar(year, month)
+        cal = calendar.TextCalendar(firstweekday=calendar.SUNDAY)
+        month_weeks = cal.monthdayscalendar(year, month)
+        weekday_labels = [calendar.day_abbr[(i + cal.getfirstweekday()) % 7] for i in range(7)]
 
+        # === 佈局：左側日曆 + 右側 Legend ===
         c1, c2 = st.columns([3, 1])
         with c1:
-            html = f"<table style='border-collapse: collapse; width:100%; text-align:center;'>"
+            html = "<table style='border-collapse: collapse; width:100%; text-align:center;'>"
             html += f"<tr><th colspan='7' style='font-size:20px;padding:8px;'>{calendar.month_name[month]} {year}</th></tr>"
-            html += "<tr>" + "".join([f"<th>{d}</th>" for d in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']]) + "</tr>"
+            html += "<tr>" + "".join([f"<th>{d}</th>" for d in weekday_labels]) + "</tr>"
 
-            for week in cal:
+            dots_size = 6
+            for week in month_weeks:
                 html += "<tr>"
                 for day in week:
                     if day == 0:
                         html += "<td style='padding:8px;border:1px solid #333;'></td>"
                     else:
                         day_date = date(year, month, day)
-                        day_events = events_df[events_df["date"] == day_date]
-                        if not day_events.empty:
-                            dots_html = ""
-                            for cat in day_events["category"].unique():
-                                if cat in color_map:
-                                    dots_html += f"<div style='width:6px;height:6px;border-radius:50%;background:{color_map[cat]};display:inline-block;margin:1px;'></div>"
-                            html += f"<td style='padding:6px;border:1px solid #333;'>{day}<br>{dots_html}</td>"
-                        else:
-                            html += f"<td style='padding:8px;border:1px solid #333;'>{day}</td>"
+                        day_str = day_date.isoformat()
+                        ddf = events_df[events_df["date_str"] == day_str]
+                        dots = ""
+                        for cat_norm in sorted(ddf["cat_norm"].dropna().unique()):
+                            col = color_map_canon.get(cat_norm, "#9E9E9E")
+                            label = label_map_canon.get(cat_norm, cat_norm)
+                            dots += (
+                                f"<div title='{label}' "
+                                f"style='width:{dots_size}px;height:{dots_size}px;"
+                                f"border-radius:50%;background:{col};display:inline-block;margin:1px;'></div>"
+                            )
+                        html += f"<td style='padding:4px;border:1px solid #333;'>{day}<br>{dots}</td>"
                 html += "</tr>"
             html += "</table>"
             st.markdown(html, unsafe_allow_html=True)
 
         with c2:
-            st.markdown("<div style='font-size:14px; font-weight:600;'>📌 類別</div>", unsafe_allow_html=True)
+            st.markdown("<div style='font-size:16px; font-weight:600;'>📌 類別</div>", unsafe_allow_html=True)
             legend_html = ""
             for cat, col in color_map.items():
-                legend_html += f"<div style='margin:2px 0;'><span style='display:inline-block;width:10px;height:10px;border-radius:50%;background:{col};margin-right:6px;'></span>{cat}</div>"
+                legend_html += (
+                    f"<div style='margin:2px 0;'>"
+                    f"<span style='display:inline-block;width:7px;height:7px;"
+                    f"border-radius:50%;background:{col};margin-right:6px;'></span>{cat}</div>"
+                )
             st.markdown(legend_html, unsafe_allow_html=True)
 
-        # === 日期與資料檢視 ===
-        sel_date = st.date_input("選擇日期", value=date.today(), key="bydate_date_picker")
+        # === 日期選擇 + 詳細紀錄 ===
+        sel_date = st.date_input("選擇日期", value=today, key="bydate_date_picker")
         sel_date_str = sel_date.isoformat()
-        day_df = events_df[events_df["date"].astype(str) == sel_date_str][["date","title","category","participant"]]
+        day_df = events_df[events_df["date_str"] == sel_date_str][["date_str","title","category","participant"]]
 
         if day_df.empty:
             st.info(f"{sel_date_str} 沒有任何紀錄。")
         else:
-            cat_options = sorted(day_df["category"].unique())
+            cat_options = sorted(day_df["category"].astype(str).unique())
             sel_cats = st.multiselect("篩選類別（可多選）", options=cat_options, default=cat_options, key="bydate_cats_multiselect")
             show_df = day_df[day_df["category"].isin(sel_cats)].copy()
 
             names = sorted(show_df["participant"].astype(str).unique())
             st.write(f"**共 {len(names)} 人**：", "、".join(names) if names else "（無）")
             st.dataframe(show_df[["participant","title","category"]].sort_values(["category","participant"]), use_container_width=True, height=300)
-            st.download_button("⬇️ 下載當日明細 Excel", data=df_to_excel_bytes(show_df, "events"), file_name=f"events_{sel_date_str}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="bydate_download_btn")
-
-
+            st.download_button("⬇️ 下載當日明細 Excel（匯出）",
+                               data=df_to_excel_bytes(show_df, "events"),
+                               file_name=f"events_{sel_date_str}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               key="bydate_download_btn")
 
 # -------- 3) 個人明細 --------
 with tabs[3]:
