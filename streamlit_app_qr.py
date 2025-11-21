@@ -228,10 +228,13 @@ def _need_pw(action_key: str, payload: dict | None = None):
 # 四個主鍵欄
 KEY_COLS = ["date", "title", "category", "participant"]
 
+# 🔧 這裡有改：把 'None' / 'nan' / 'NaN' 當成空白
 def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     for c in df.columns:
-        out[c] = out[c].astype(str).fillna("").str.strip()
+        s = out[c].astype(str)          # NaN -> 'nan', None -> 'None'
+        s = s.replace({"None": "", "nan": "", "NaN": ""})
+        out[c] = s.str.strip()
     return out
 
 def _is_blank_row(row) -> bool:
@@ -382,12 +385,11 @@ def save_config_to_sheet(sh, cfg):
     df_to_ws(ws_items, items, ["category", "points"])
     df_to_ws(ws_rewards, rewards, ["threshold", "reward"])
 
+# 🔧 改這裡：讀取 events 就套用 _normalize_df
 def load_events_from_sheet(sh) -> pd.DataFrame:
     ws = get_or_create_ws(sh, "events", EVENT_COLS)
     df = ws_to_df(ws, EVENT_COLS)
-    for c in df.columns:
-        df[c] = df[c].astype(str).fillna("").str.strip()
-    return df
+    return _normalize_df(df)
 
 def save_events_to_sheet(sh, df: pd.DataFrame, *, allow_clear: bool = False):
     ws = get_or_create_ws(sh, "events", EVENT_COLS)
@@ -511,7 +513,7 @@ if mode == "checkin":
 
     if not sh:
         st.error("找不到 Google Sheet。")
-        st.stop()
+    st.stop()
 
     events_df = load_events_from_sheet(sh)
     links_df = load_links_from_sheet(sh)
@@ -979,9 +981,14 @@ with tabs[4]:
     st.subheader("完整記錄（可編輯）")
     st.caption("欄位：date, title, category, participant, idempotency_key（請勿修改 id 欄）")
 
-    df = _normalize_df(st.session_state.events).copy()
+    # 先把資料 normalize，一次處理 'None' / 'nan'
+    base_df = _normalize_df(st.session_state.events)
+    original_df = base_df.copy()
 
-    # 🔽 新增排序下拉選單（Google Sheet 風格）
+    # 把四個主鍵都空的幽靈列（以前刪成 None 的）直接去掉
+    base_df = base_df[~base_df.apply(_is_blank_row, axis=1)].reset_index(drop=True)
+
+    # 🔽 排序方式（只影響畫面）
     sort_mode = st.selectbox(
         "排序方式（只影響畫面）",
         [
@@ -993,15 +1000,15 @@ with tabs[4]:
         key="full_sort_mode",
     )
 
-    # 📌 套用排序（只是畫面順序，不影響寫回順序）
+    df = base_df.copy()
     if sort_mode == "依日期：新 → 舊":
-        df = df.sort_values("date", ascending=False, na_position='last')
+        df = df.sort_values("date", ascending=False, na_position="last")
     elif sort_mode == "依日期：舊 → 新":
-        df = df.sort_values("date", ascending=True, na_position='last')
+        df = df.sort_values("date", ascending=True, na_position="last")
     elif sort_mode == "姓名：A → Z":
-        df = df.sort_values("participant", ascending=True, na_position='last')
+        df = df.sort_values("participant", ascending=True, na_position="last")
     elif sort_mode == "姓名：Z → A":
-        df = df.sort_values("participant", ascending=False, na_position='last')
+        df = df.sort_values("participant", ascending=False, na_position="last")
 
     df = df.reset_index(drop=True)
 
@@ -1030,7 +1037,7 @@ with tabs[4]:
         )
         return set(combo)
 
-    deleted_count = len(_keyset(st.session_state.events) - _keyset(edited_nonblank))
+    deleted_count = len(_keyset(original_df) - _keyset(edited_nonblank))
     st.info(f"本次變更偵測到：刪除 {deleted_count} 筆（若為 0 代表只有新增/修改，按保存變更才會寫回）。")
 
     if st.button("💾 保存變更", key="full_save_btn"):
