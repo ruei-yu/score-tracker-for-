@@ -974,80 +974,64 @@ with tabs[3]:
             key="detail_download_btn",
         )
 
-# -------- 4) 完整記錄（可編輯 + 🆕排序） --------
+# -------- 4) 完整記錄（可編輯） --------
 with tabs[4]:
     st.subheader("完整記錄（可編輯）")
     st.caption("欄位：date, title, category, participant, idempotency_key（請勿修改 id 欄）")
 
-    # 🆕 排序選項
-    sort_option = st.selectbox(
-        "排序方式（只影響畫面顯示）",
+    df = _normalize_df(st.session_state.events).copy()
+
+    # 🔽 新增排序下拉選單（Google Sheet 風格）
+    sort_mode = st.selectbox(
+        "排序方式（只影響畫面）",
         [
-            "日期：新 → 舊",
-            "日期：舊 → 新",
+            "依日期：新 → 舊",
+            "依日期：舊 → 新",
             "姓名：A → Z",
             "姓名：Z → A",
-            "類別：A → Z",
-            "類別：Z → A",
         ],
-        key="full_sort_option",
+        key="full_sort_mode",
     )
 
-    # 原始快照（不排序，用來算刪除筆數）
-    original_df = _normalize_df(st.session_state.events)
+    # 📌 套用排序（只是畫面順序，不影響寫回順序）
+    if sort_mode == "依日期：新 → 舊":
+        df = df.sort_values("date", ascending=False, na_position='last')
+    elif sort_mode == "依日期：舊 → 新":
+        df = df.sort_values("date", ascending=True, na_position='last')
+    elif sort_mode == "姓名：A → Z":
+        df = df.sort_values("participant", ascending=True, na_position='last')
+    elif sort_mode == "姓名：Z → A":
+        df = df.sort_values("participant", ascending=False, na_position='last')
 
-    # 依使用者選擇建立「檢視用」DataFrame
-    view_df = st.session_state.events.copy()
-    if sort_option == "日期：新 → 舊":
-        view_df = view_df.sort_values("date", ascending=False)
-    elif sort_option == "日期：舊 → 新":
-        view_df = view_df.sort_values("date", ascending=True)
-    elif sort_option == "姓名：A → Z":
-        view_df = view_df.sort_values("participant", ascending=True)
-    elif sort_option == "姓名：Z → A":
-        view_df = view_df.sort_values("participant", ascending=False)
-    elif sort_option == "類別：A → Z":
-        view_df = view_df.sort_values("category", ascending=True)
-    elif sort_option == "類別：Z → A":
-        view_df = view_df.sort_values("category", ascending=False)
+    df = df.reset_index(drop=True)
 
+    # -------- 顯示可編輯表格 --------
     edited = st.data_editor(
-        view_df,
+        df,
         num_rows="dynamic",
         use_container_width=True,
         key="full_editor_table",
         column_config={
-            "idempotency_key": st.column_config.TextColumn(
-                "idempotency_key", disabled=True
-            ),
+            "idempotency_key": st.column_config.TextColumn("idempotency_key", disabled=True),
         },
     )
 
     edited_norm = _normalize_df(edited)
-    edited_nonblank = edited_norm[
-        ~edited_norm.apply(_is_blank_row, axis=1)
-    ].reset_index(drop=True)
+    edited_nonblank = edited_norm[~edited_norm.apply(_is_blank_row, axis=1)].reset_index(drop=True)
 
     def _keyset(df: pd.DataFrame) -> set[str]:
-        if "idempotency_key" in df.columns and df["idempotency_key"].astype(
-            str
-        ).str.len().gt(0).any():
+        if "idempotency_key" in df.columns and df["idempotency_key"].astype(str).str.len().gt(0).any():
             return set(df["idempotency_key"].astype(str))
         combo = (
-            df["date"].astype(str)
-            + "|"
-            + df["title"].astype(str)
-            + "|"
-            + df["category"].astype(str)
-            + "|"
-            + df["participant"].astype(str)
+            df["date"].astype(str) + "|" +
+            df["title"].astype(str) + "|" +
+            df["category"].astype(str) + "|" +
+            df["participant"].astype(str)
         )
         return set(combo)
 
-    deleted_count = len(_keyset(original_df) - _keyset(edited_nonblank))
-    st.info(
-        f"本次變更偵測到：刪除 {deleted_count} 筆（若為 0 代表只有新增/修改，還需要按下保存變更，才可輸入密碼）。"
-    )
+    deleted_count = len(_keyset(st.session_state.events) - _keyset(edited_nonblank))
+    st.info(f"本次變更偵測到：刪除 {deleted_count} 筆（若為 0 代表只有新增/修改，按保存變更才會寫回）。")
 
     if st.button("💾 保存變更", key="full_save_btn"):
         _need_pw("delete_rows", {"edited_df": edited_nonblank})
@@ -1061,13 +1045,11 @@ with tabs[4]:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="full_download_btn",
         )
-
     with c2:
         st.markdown("**🗄️ 歸檔並清空（建立新工作表備份）**")
         if st.button("執行歸檔並清空", key="full_archive_btn"):
             backup_title = f"events_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             _need_pw("archive_clear", {"backup_title": backup_title})
-
     with c3:
         st.markdown("**♻️ 只清空（不備份）**")
         if st.button("執行只清空", key="full_clear_btn"):
