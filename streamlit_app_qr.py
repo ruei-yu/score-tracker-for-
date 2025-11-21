@@ -8,6 +8,7 @@ from datetime import date, datetime
 from urllib.parse import quote, unquote
 import qrcode
 import time, random
+
 # ==== utils_safe_url (inline, LINE 友善) ====
 import io, qrcode
 from urllib.parse import urlsplit, urlunsplit, quote, quote_plus
@@ -104,7 +105,7 @@ def _get_gspread_client():
     if not pk.startswith("-----BEGIN PRIVATE KEY-----"):
         pk = "-----BEGIN PRIVATE KEY-----\n" + pk.split("-----BEGIN PRIVATE KEY-----")[-1].lstrip()
     if not pk.endswith("-----END PRIVATE KEY-----"):
-        pk = pk.split("-----END PRIVATE KEY-----")[0].rstrip() + "\n-----END PRIVATE KEY-----"
+        pk = pk.split("-----BEGIN PRIVATE KEY-----")[0].rstrip() + "\n-----END PRIVATE KEY-----"
     info = dict(info); info["private_key"] = pk
     # ---- END ----
 
@@ -159,8 +160,6 @@ def get_or_create_ws(sh, title: str, headers: list[str]):
 
     if ws is None:
         st.error(f"取得工作表「{title}」失敗（ws=None）。請檢查 sheet_id/權限。")
-        st.stop()
-
     # 確保表頭齊全（補缺欄）
     try:
         values = _with_retry(ws.get_all_values)
@@ -255,15 +254,12 @@ def _show_pw_dialog():
         "clear_only": "清空資料需要管理密碼",
     }.get(action, "需要管理密碼")
 
-    # 用 st.dialog（新版）或 inline（舊版）
     def render_inner():
         pw = st.text_input("請輸入管理密碼", type="password", key="__admin_pw")
         c1, c2 = st.columns(2)
         if c1.button("確認"):
-            if pw == ADMIN_PASS:
-                # 執行動作
+            if _check_pw(pw):
                 _exec_pending_action()
-                # 清理
                 st.session_state["pending_action"] = ""
                 st.session_state["pending_payload"] = {}
                 st.success("已完成。")
@@ -284,42 +280,6 @@ def _show_pw_dialog():
         st.warning(title)
         render_inner()
 
-def _exec_pending_action():
-    """依 pending_action 執行實際工作。"""
-    action = st.session_state.get("pending_action")
-    payload = st.session_state.get("pending_payload") or {}
-
-    if action == "delete_rows":
-        edited = payload["edited_df"]
-        # 真正寫回
-        st.session_state.events = edited
-        save_events_to_sheet(sh, edited)
-
-    elif action == "archive_clear":
-        backup_title = payload["backup_title"]
-        ws_backup = get_or_create_ws(sh, backup_title, EVENT_COLS)
-        df_to_ws(ws_backup, st.session_state.events, EVENT_COLS)
-        st.session_state.events = st.session_state.events.iloc[0:0]
-        save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
-
-    elif action == "clear_only":
-        st.session_state.events = st.session_state.events.iloc[0:0]
-        save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
-
-def _count_deleted_rows(before_df: pd.DataFrame, after_df: pd.DataFrame) -> int:
-    """用 idempotency_key 判斷刪除；若沒有就用四欄組合鍵。更穩。"""
-    def keyset(df: pd.DataFrame) -> set[str]:
-        if "idempotency_key" in df.columns and df["idempotency_key"].astype(str).str.len().gt(0).any():
-            return set(df["idempotency_key"].astype(str))
-        combo = (
-            df["date"].astype(str) + "|" +
-            df["title"].astype(str) + "|" +
-            df["category"].astype(str) + "|" +
-            df["participant"].astype(str)
-        )
-        return set(combo)
-    return len(keyset(before_df) - keyset(after_df))
-
 # 這四欄是判斷「是否為有效資料列」的主鍵欄
 KEY_COLS = ["date","title","category","participant"]
 
@@ -334,6 +294,19 @@ def _is_blank_row(row) -> bool:
     """四個主鍵欄位全空，視為『空列』"""
     return all((str(row.get(c, "")).strip() == "") for c in KEY_COLS)
 
+def _count_deleted_rows(before_df: pd.DataFrame, after_df: pd.DataFrame) -> int:
+    """用 idempotency_key 判斷刪除；若沒有就用四欄組合鍵。更穩。"""
+    def keyset(df: pd.DataFrame) -> set[str]:
+        if "idempotency_key" in df.columns and df["idempotency_key"].astype(str).str.len().gt(0).any():
+            return set(df["idempotency_key"].astype(str))
+        combo = (
+            df["date"].astype(str) + "|" +
+            df["title"].astype(str) + "|" +
+            df["category"].astype(str) + "|" +
+            df["participant"].astype(str)
+        )
+        return set(combo)
+    return len(keyset(before_df) - keyset(after_df))
 
 # ---------- 新增：穩定寫入（append + 退避重試） ----------
 def safe_append(ws, rows: list[list], *, value_input_option: str = "RAW") -> bool:
@@ -446,7 +419,11 @@ EVENT_COLS = ["date","title","category","participant","idempotency_key"]
 
 def load_events_from_sheet(sh) -> pd.DataFrame:
     ws = get_or_create_ws(sh, "events", EVENT_COLS)
-    return ws_to_df(ws, EVENT_COLS)
+    df = ws_to_df(ws, EVENT_COLS)
+    # 🆕 去前後空白，避免隱藏空格造成「同一個人卻算兩筆」
+    for c in df.columns:
+        df[c] = df[c].astype(str).fillna("").str.strip()
+    return df
 
 def save_events_to_sheet(sh, df: pd.DataFrame, *, allow_clear: bool=False):
     """僅在需要覆蓋/清空時才用；平時報到用 append 安全寫入。"""
@@ -490,7 +467,6 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
     for i in range(max_retries):
         try:
             r = requests.post(AS_URL, json=payload, timeout=12)
-            # 先試 JSON
             try:
                 data = r.json()
                 status = (data.get("status") or "").upper()
@@ -499,7 +475,6 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
                     return status
                 if status == "ERR":
                     return f"ERR: {msg}"
-                # 未預期格式
                 last_err = f"HTTP {r.status_code} JSON={data}"
             except Exception:
                 last_err = f"HTTP {r.status_code} TEXT={r.text[:200]}"
@@ -527,7 +502,7 @@ def append_events_rows(sh, rows: list[dict]):
                 skipped.append(p)
             else:
                 st.warning(f"{p} 寫入失敗：{res}")
-        return {"added": added, "skipped": skipped}
+        return {"added": added, "skipped": [] if not 'skipped' in locals() else skipped}
 
     # ── 否則走「直接寫表」：本地去重 + 兩表附寫 ──
     ws_events = get_or_create_ws(sh, "events", EVENT_COLS)
@@ -555,7 +530,6 @@ def append_events_rows(sh, rows: list[dict]):
 # ==== 寫入模式：API 或 直接寫 Sheet（必須放在會呼叫 append_events_rows 之前）====
 AS_URL = st.secrets.get("apps_script", {}).get("web_app_url", "").strip()
 use_api_default = bool(AS_URL)
-# 預設模式給個全域值（讓 public checkin 時也有值）
 WRITE_MODE = "透過後端 API（推薦）" if use_api_default else "直接寫入 Google Sheet"
 
 # ================= Query Params / Sheet ID bootstrap =================
@@ -651,7 +625,6 @@ def api_healthcheck() -> str:
     if not AS_URL:
         return "未設定 API URL"
     try:
-        # Apps Script 沒做 GET 也沒關係，這裡僅測試可達性
         r = requests.get(AS_URL, timeout=6)
         return f"可連線（HTTP {r.status_code}）"
     except Exception as e:
@@ -661,7 +634,6 @@ with st.sidebar.expander("🔌 後端 API 狀態", expanded=False):
     st.write(f"API URL：{AS_URL or '（未設定）'}")
     if st.button("測試連線", key="btn_api_ping"):
         st.info(api_healthcheck())
-
 
 # 載入設定 / 資料
 if "config" not in st.session_state:
@@ -688,14 +660,14 @@ for i in scoring_items:
 with st.sidebar.expander("➕ 編輯集點項目與點數", expanded=False):
     st.caption("新增或調整表格後點『儲存設定』。")
     items_df = pd.DataFrame(scoring_items) if scoring_items else pd.DataFrame(columns=["category","points"])
-    edited = st.data_editor(items_df, num_rows="dynamic", use_container_width=True, key="sb_items_editor")
+    edited_items = st.data_editor(items_df, num_rows="dynamic", use_container_width=True, key="sb_items_editor")
     if st.button("💾 儲存設定（集點項目）", key="sb_save_items_btn"):
         cfg = st.session_state.config
-        if not edited.empty:
-            edited["category"] = edited["category"].astype(str)
-            edited["points"] = pd.to_numeric(edited["points"], errors="coerce").fillna(0).astype(int)
-            edited = edited.dropna(subset=["category"])
-        cfg["scoring_items"] = edited.to_dict(orient="records")
+        if not edited_items.empty:
+            edited_items["category"] = edited_items["category"].astype(str)
+            edited_items["points"] = pd.to_numeric(edited_items["points"], errors="coerce").fillna(0).astype(int)
+            edited_items = edited_items.dropna(subset=["category"])
+        cfg["scoring_items"] = edited_items.to_dict(orient="records")
         st.session_state.config = cfg
         save_config_to_sheet(sh, cfg)
         st.success("已儲存集點項目。")
@@ -737,21 +709,16 @@ with tabs[0]:
     iso = qr_date.isoformat()
     code = make_code(qr_title or qr_category, qr_category, iso, length=8)
 
-    # 更新/寫入 links（Google Sheet）
     links_df = st.session_state.links
     links_df = upsert_link(links_df, code=code, title=(qr_title or qr_category),
                            category=qr_category, iso_date=iso)
     st.session_state.links = links_df
     save_links_to_sheet(sh, links_df)
 
-    # ✅ 使用「內嵌」的函式產生 LINE 友善短連結
     short_url = build_checkin_url(public_base, code)
 
     if public_base:
-        # 只顯示一個最佳網址（可點連結 + 純文字 + QR Code）
         show_safe_link_box(short_url)
-
-        # 提供 QR 圖檔下載
         img = qrcode.make(short_url)
         buf = io.BytesIO(); img.save(buf, format="PNG")
         st.download_button("⬇️ 下載 QR 圖片",
@@ -762,8 +729,6 @@ with tabs[0]:
     else:
         st.info("請貼上你的 .streamlit.app 根網址（本頁網址）。")
 
-    import io
-    
     with st.expander("🔎 目前所有短代碼一覽", expanded=False):
         st.dataframe(links_df.sort_values("date", ascending=False),
                      use_container_width=True, height=220)
@@ -804,7 +769,6 @@ with tabs[1]:
                       for n in names]
             result = append_events_rows(sh, to_add) or {"added": [], "skipped": []}
             if result["added"]:
-                # 重新載入 events（保留 idempotency_key）
                 st.session_state.events = load_events_from_sheet(sh)
                 st.success(f"已加入 {len(result['added'])} 人：{'、'.join(result['added'])}")
             if result["skipped"]:
@@ -815,26 +779,24 @@ with tabs[2]:
     st.subheader("📆 依日期查看參與者")
 
     import calendar, re
-    from datetime import date
+    from datetime import date as _date
 
-    # === 顏色對照表 ===
     color_map = {
-        "帶人開法會": "#FF0000",      # 紅 - 熱烈明確
-        "法會護持一天": "#FF7F00",    # 橙 - 活力強
-        "參與獻供": "#E6B800",        # 暗金黃 - 穩重光澤
-        "活動護持 (含宿訪)": "#00C300",  # 綠 - 生機自然
-        "參與晨讀": "#00FFFF",        # 青藍 - 清新明亮
-        "參與讀書會/ 與學長姐有約": "#0066FF",  # 藍 - 專注穩重
-        "上研究班 (新民、至善)": "#8A2BE2",    # 紫羅蘭 - 智慧莊嚴
-        "參與辦道": "#FF1493",        # 桃紅 - 熱誠積極
-        "參與成全/道務會議": "#A0522D", # 棕 - 穩重奉獻
-        "帶人求道": "#FFFF66",        # 檸檬亮黃 - 成果榮耀
-        "帶人進研究班": "#BEBEBE",    # 石磨灰 - 柔和中性
-        "練講": "#F4A3A3",           # 紅鶴粉 - 溫潤柔和
-        "背誦經典": "#808080",        # 中灰 - 靜謐收尾
+        "帶人開法會": "#FF0000",
+        "法會護持一天": "#FF7F00",
+        "參與獻供": "#E6B800",
+        "活動護持 (含宿訪)": "#00C300",
+        "參與晨讀": "#00FFFF",
+        "參與讀書會/ 與學長姐有約": "#0066FF",
+        "上研究班 (新民、至善)": "#8A2BE2",
+        "參與辦道": "#FF1493",
+        "參與成全/道務會議": "#A0522D",
+        "帶人求道": "#FFFF66",
+        "帶人進研究班": "#BEBEBE",
+        "練講": "#F4A3A3",
+        "背誦經典": "#808080",
     }
 
-    # === 正規化類別 ===
     def canon_cat(s: str) -> str:
         s = str(s or "").strip()
         s = s.replace("（", "(").replace("）", ")").replace("／", "/").replace("　", " ")
@@ -855,8 +817,7 @@ with tabs[2]:
         events_df["date"] = pd.to_datetime(events_df["date"], errors="coerce").dt.date
         events_df["cat_norm"] = events_df["category"].map(canon_cat)
 
-        # === 新增：年份與月份選擇 ===
-        today = date.today()
+        today = _date.today()
         coly, colm = st.columns(2)
         with coly:
             year = st.number_input("年份", min_value=2020, max_value=2035, value=today.year, step=1)
@@ -867,7 +828,6 @@ with tabs[2]:
         month_weeks = cal.monthdayscalendar(year, month)
         weekday_labels = [calendar.day_abbr[(i + cal.getfirstweekday()) % 7] for i in range(7)]
 
-        # === 佈局：左側日曆 + 右側 Legend ===
         c1, c2 = st.columns([3, 1])
         with c1:
             html = "<table style='border-collapse: collapse; width:100%; text-align:center;'>"
@@ -881,7 +841,7 @@ with tabs[2]:
                     if day == 0:
                         html += "<td style='padding:8px;border:1px solid #333;'></td>"
                     else:
-                        day_date = date(year, month, day)
+                        day_date = _date(year, month, day)
                         day_str = day_date.isoformat()
                         ddf = events_df[events_df["date_str"] == day_str]
                         dots = ""
@@ -909,7 +869,6 @@ with tabs[2]:
                 )
             st.markdown(legend_html, unsafe_allow_html=True)
 
-        # === 日期選擇 + 詳細紀錄 ===
         sel_date = st.date_input("選擇日期", value=today, key="bydate_date_picker")
         sel_date_str = sel_date.isoformat()
         day_df = events_df[events_df["date_str"] == sel_date_str][["date_str","title","category","participant"]]
@@ -923,7 +882,8 @@ with tabs[2]:
 
             names = sorted(show_df["participant"].astype(str).unique())
             st.write(f"**共 {len(names)} 人**：", "、".join(names) if names else "（無）")
-            st.dataframe(show_df[["participant","title","category"]].sort_values(["category","participant"]), use_container_width=True, height=300)
+            st.dataframe(show_df[["participant","title","category"]].sort_values(["category","participant"]),
+                         use_container_width=True, height=300)
             st.download_button("⬇️ 下載當日明細 Excel（匯出）",
                                data=df_to_excel_bytes(show_df, "events"),
                                file_name=f"events_{sel_date_str}.xlsx",
@@ -956,95 +916,17 @@ with tabs[3]:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="detail_download_btn",
         )
-    
-def _show_pw_dialog():
-    """若有待執行動作，就顯示密碼對話框；驗證通過後執行並清理旗標。"""
-    action = st.session_state.get("pending_action")
-    if not action:
-        return
-
-    title = {
-        "delete_rows": "刪除資料需要管理密碼",
-        "archive_clear": "歸檔並清空需要管理密碼",
-        "clear_only": "清空資料需要管理密碼",
-    }.get(action, "需要管理密碼")
-
-    # 用 st.dialog（新版）或 inline（舊版）
-    def render_inner():
-        pw = st.text_input("請輸入管理密碼", type="password", key="__admin_pw")
-        c1, c2 = st.columns(2)
-        if c1.button("確認"):
-            if _check_pw(pw):
-                # 執行動作
-                _exec_pending_action()
-                # 清理
-                st.session_state["pending_action"] = ""
-                st.session_state["pending_payload"] = {}
-                st.success("已完成。")
-                st.rerun()
-            else:
-                st.error("密碼錯誤")
-        if c2.button("取消"):
-            st.session_state["pending_action"] = ""
-            st.session_state["pending_payload"] = {}
-            st.rerun()
-
-    if HAVE_DIALOG:
-        @st.dialog(title)
-        def _dlg():
-            render_inner()
-        _dlg()
-    else:
-        st.warning(title)
-        render_inner()
-
-def _exec_pending_action():
-    """依 pending_action 執行實際工作。"""
-    action = st.session_state.get("pending_action")
-    payload = st.session_state.get("pending_payload") or {}
-
-    if action == "delete_rows":
-        edited = payload["edited_df"]
-        # 真正寫回
-        st.session_state.events = edited
-        save_events_to_sheet(sh, edited)
-
-    elif action == "archive_clear":
-        backup_title = payload["backup_title"]
-        ws_backup = get_or_create_ws(sh, backup_title, EVENT_COLS)
-        df_to_ws(ws_backup, st.session_state.events, EVENT_COLS)
-        st.session_state.events = st.session_state.events.iloc[0:0]
-        save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
-
-    elif action == "clear_only":
-        st.session_state.events = st.session_state.events.iloc[0:0]
-        save_events_to_sheet(sh, st.session_state.events, allow_clear=True)
-
-def _count_deleted_rows(before_df: pd.DataFrame, after_df: pd.DataFrame) -> int:
-    """用 idempotency_key 判斷刪除；若沒有就用四欄組合鍵。更穩。"""
-    def keyset(df: pd.DataFrame) -> set[str]:
-        if "idempotency_key" in df.columns and df["idempotency_key"].astype(str).str.len().gt(0).any():
-            return set(df["idempotency_key"].astype(str))
-        combo = (
-            df["date"].astype(str) + "|" +
-            df["title"].astype(str) + "|" +
-            df["category"].astype(str) + "|" +
-            df["participant"].astype(str)
-        )
-        return set(combo)
-    return len(keyset(before_df) - keyset(after_df))
 
 # -------- 4) 完整記錄 --------
 with tabs[4]:
     st.subheader("完整記錄（可編輯）")
     st.caption("欄位：date, title, category, participant, idempotency_key（請勿修改 id 欄）")
 
-    # 原始快照（供刪除偵測）
     original_df = _normalize_df(st.session_state.events)
 
     edited = st.data_editor(
         st.session_state.events,
-        num_rows="dynamic",  # 可新增/刪除列
+        num_rows="dynamic",
         use_container_width=True,
         key="full_editor_table",
         column_config={
@@ -1052,13 +934,9 @@ with tabs[4]:
         },
     )
 
-    # ---- 不要自動寫回！等按『保存變更』時才處理 ----
-
-    # 把使用者編輯後的資料做一次正規化，並把全空列先濾掉（視為刪除）
     edited_norm = _normalize_df(edited)
     edited_nonblank = edited_norm[~edited_norm.apply(_is_blank_row, axis=1)].reset_index(drop=True)
 
-    # 計算刪除筆數（包含真的刪列，及「清空成空列」的情況）
     def _keyset(df: pd.DataFrame) -> set[str]:
         if "idempotency_key" in df.columns and df["idempotency_key"].astype(str).str.len().gt(0).any():
             return set(df["idempotency_key"].astype(str))
@@ -1073,12 +951,9 @@ with tabs[4]:
     deleted_count = len(_keyset(original_df) - _keyset(edited_nonblank))
     st.info(f"本次變更偵測到：刪除 {deleted_count} 筆（若為 0 代表只有新增/修改，還需要按下保存變更，才可輸入密碼）。")
 
-    # 保存變更：只在這個按鈕被按時才會寫回
     if st.button("💾 保存變更", key="full_save_btn"):
-        # 無論是否刪除，只要要寫回，我們都走密碼（你也可以只在 deleted_count>0 時走密碼）
         _need_pw("delete_rows", {"edited_df": edited_nonblank})
 
-    # 下載鈕
     c1, c2, c3 = st.columns(3)
     with c1:
         st.download_button(
@@ -1089,16 +964,12 @@ with tabs[4]:
             key="full_download_btn",
         )
 
-
-
-    # 歸檔並清空（先要求密碼）
     with c2:
         st.markdown("**🗄️ 歸檔並清空（建立新工作表備份）**")
         if st.button("執行歸檔並清空", key="full_archive_btn"):
             backup_title = f"events_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             _need_pw("archive_clear", {"backup_title": backup_title})
 
-    # 只清空（先要求密碼）
     with c3:
         st.markdown("**♻️ 只清空（不備份）**")
         if st.button("執行只清空", key="full_clear_btn"):
@@ -1107,7 +978,6 @@ with tabs[4]:
 # -------- 5) 排行榜 --------
 with tabs[5]:
     st.subheader("排行榜（依總點數）")
-    # 顯示時不需要 id 欄
     ev4 = st.session_state.events[["date","title","category","participant"]].copy()
     summary = aggregate(ev4, points_map, rewards)
     st.dataframe(summary, use_container_width=True, height=520)
@@ -1136,7 +1006,30 @@ with tabs[5]:
                 df_to_ws(ws_snap, summary, list(summary.columns))
                 st.success(f"已建立快照：{snap_title}")
 
+# === 密碼動作實作（放在最後，會用到上面定義的函式） ===
+def _exec_pending_action():
+    """依 pending_action 執行實際工作。"""
+    action = st.session_state.get("pending_action")
+    payload = st.session_state.get("pending_payload") or {}
+
+    if action == "delete_rows":
+        edited = payload["edited_df"]
+        save_events_to_sheet(sh, edited, allow_clear=True)
+        st.session_state.events = load_events_from_sheet(sh)
+
+    elif action == "archive_clear":
+        backup_title = payload["backup_title"]
+        ws_backup = get_or_create_ws(sh, backup_title, EVENT_COLS)
+        df_to_ws(ws_backup, st.session_state.events, EVENT_COLS)
+
+        empty_df = st.session_state.events.iloc[0:0]
+        save_events_to_sheet(sh, empty_df, allow_clear=True)
+        st.session_state.events = load_events_from_sheet(sh)
+
+    elif action == "clear_only":
+        empty_df = st.session_state.events.iloc[0:0]
+        save_events_to_sheet(sh, empty_df, allow_clear=True)
+        st.session_state.events = load_events_from_sheet(sh)
+
 # 若有待執行動作，顯示密碼對話框
 _show_pw_dialog()
-
-
