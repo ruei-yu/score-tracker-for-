@@ -1,23 +1,18 @@
 # --- 頁面設定 ---
 import streamlit as st
 st.set_page_config(page_title="護持活動集點(for幹部)", page_icon="🔢", layout="wide")
+
 import requests
 import pandas as pd
 import json, io, hashlib, re
 from datetime import date, datetime
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlsplit, urlunsplit, quote_plus
 import qrcode
 import time, random
+import os, hmac
 
-# ==== utils_safe_url (inline, LINE 友善) ====
-import io, qrcode
-from urllib.parse import urlsplit, urlunsplit, quote, quote_plus
-
-import io
-import pandas as pd
-
+# ================== Excel 匯出工具 ==================
 def df_to_excel_bytes(df: pd.DataFrame, sheet_name="Sheet1") -> bytes:
-    # 優先用 openpyxl，沒有就改用 xlsxwriter
     engine = None
     try:
         import openpyxl  # noqa
@@ -27,7 +22,6 @@ def df_to_excel_bytes(df: pd.DataFrame, sheet_name="Sheet1") -> bytes:
             import xlsxwriter  # noqa
             engine = "xlsxwriter"
         except Exception:
-            # 兩個都沒有就明確報錯
             raise RuntimeError("需要 openpyxl 或 xlsxwriter 其中之一，請在 requirements.txt 安裝其中一個")
 
     buf = io.BytesIO()
@@ -35,7 +29,7 @@ def df_to_excel_bytes(df: pd.DataFrame, sheet_name="Sheet1") -> bytes:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
     return buf.getvalue()
 
-
+# ================== 安全網址 + QR ==================
 def _sanitize_url(url: str) -> str:
     u = (url or "").strip()
     if not u:
@@ -65,7 +59,6 @@ def build_checkin_url(public_base: str, code: str) -> str:
     return _sanitize_url(f"{base}/?mode=checkin&c={quote_plus(str(code))}")
 
 def show_safe_link_box(url: str, title: str = "分享報到短連結（LINE 友善）"):
-    import streamlit as st
     safe = _sanitize_url(url)
     st.subheader(title)
     st.markdown(
@@ -75,9 +68,9 @@ def show_safe_link_box(url: str, title: str = "分享報到短連結（LINE 友�
     st.caption("LINE 請直接複製這段給大家（單獨一行，不要加文字或符號）")
     st.code(safe, language="text")
     img = qrcode.make(safe)
-    buf = io.BytesIO(); img.save(buf, format="PNG")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
     st.image(buf.getvalue(), caption="掃碼報到", use_column_width=False)
-# ==== end utils_safe_url ====
 
 # ================= Google Sheet Helpers =================
 from google.oauth2.service_account import Credentials
@@ -90,12 +83,11 @@ SCOPES = [
 ]
 
 def _get_gspread_client():
-    # 支援 dict 或 JSON 字串（兩種 secrets 寫法都 OK）
     info = st.secrets["gcp_service_account"]
     if isinstance(info, str):
         info = json.loads(info)
 
-    # ---- 私鑰健檢與自動修正 ----
+    # 私鑰自動修正
     pk = info.get("private_key", "")
     if not isinstance(pk, str) or "BEGIN PRIVATE KEY" not in pk:
         raise RuntimeError("secrets 裡的 gcp_service_account.private_key 看起來不對，請確認有 BEGIN/END 標頭")
@@ -106,13 +98,12 @@ def _get_gspread_client():
         pk = "-----BEGIN PRIVATE KEY-----\n" + pk.split("-----BEGIN PRIVATE KEY-----")[-1].lstrip()
     if not pk.endswith("-----END PRIVATE KEY-----"):
         pk = pk.split("-----BEGIN PRIVATE KEY-----")[0].rstrip() + "\n-----END PRIVATE KEY-----"
-    info = dict(info); info["private_key"] = pk
-    # ---- END ----
+    info = dict(info)
+    info["private_key"] = pk
 
     creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     return gspread.authorize(creds)
 
-# 固定用 secrets 裡的 sheet_id
 FIXED_SHEET_ID = st.secrets["google_sheets"]["sheet_id"]
 
 @st.cache_resource(show_spinner=False)
@@ -132,14 +123,13 @@ def _explain_api_error(e: APIError) -> str:
         return str(e)
 
 def _with_retry(func, *args, **kwargs):
-    # 專治 429/5xx 暫時性錯誤
     for i in range(5):
         try:
             return func(*args, **kwargs)
         except APIError as e:
             code = getattr(getattr(e, "response", None), "status_code", None)
             if code in (429, 500, 502, 503, 504):
-                time.sleep((1.6 ** i) + random.random() * 0.4)  # 指數退避
+                time.sleep((1.6 ** i) + random.random() * 0.4)
                 continue
             raise
 
@@ -160,7 +150,7 @@ def get_or_create_ws(sh, title: str, headers: list[str]):
 
     if ws is None:
         st.error(f"取得工作表「{title}」失敗（ws=None）。請檢查 sheet_id/權限。")
-    # 確保表頭齊全（補缺欄）
+
     try:
         values = _with_retry(ws.get_all_values)
         if not values:
@@ -170,7 +160,8 @@ def get_or_create_ws(sh, title: str, headers: list[str]):
         changed = False
         for col in headers:
             if col not in ex_header:
-                ex_header.append(col); changed = True
+                ex_header.append(col)
+                changed = True
         if changed:
             _with_retry(ws.update, [ex_header] + values[1:])
         return ws
@@ -183,16 +174,15 @@ def ws_to_df(ws, expected_cols: list[str]) -> pd.DataFrame:
     if not values:
         _with_retry(ws.update, [expected_cols])
         return pd.DataFrame(columns=expected_cols)
-    header = values[0]; data = values[1:]
+    header = values[0]
+    data = values[1:]
     df = pd.DataFrame(data, columns=header) if data else pd.DataFrame(columns=header)
     for c in expected_cols:
         if c not in df.columns:
             df[c] = ""
-    # 僅回傳期望欄位的順序
     return df[expected_cols]
 
-def safe_write_ws(ws, df: pd.DataFrame, expected_cols: list[str], *, allow_clear: bool=False):
-    """安全寫回：預設不清空（避免意外洗表），除非 allow_clear=True。"""
+def safe_write_ws(ws, df: pd.DataFrame, expected_cols: list[str], *, allow_clear: bool = False):
     if df is None:
         return
     for c in expected_cols:
@@ -211,14 +201,10 @@ def safe_write_ws(ws, df: pd.DataFrame, expected_cols: list[str], *, allow_clear
     _with_retry(ws.update, data)
 
 def df_to_ws(ws, df: pd.DataFrame, expected_cols: list[str]):
-    """保留給非 events 類表格（如設定/排行榜）覆蓋寫回使用。"""
     safe_write_ws(ws, df, expected_cols, allow_clear=True)
 
-# === 管理密碼（可放到 secrets: [app].admin_password） ===
-import os, hmac
-
+# ============ 管理密碼 ============
 def _get_admin_pass() -> str:
-    # 只從 Secrets 或環境變數讀，沒有就回空字串（代表未設定）
     return (
         st.secrets.get("app", {}).get("admin_password")
         or os.getenv("ADMIN_PASSWORD", "")
@@ -227,90 +213,49 @@ def _get_admin_pass() -> str:
 ADMIN_PASS = _get_admin_pass()
 
 def _check_pw(pw_input: str) -> bool:
-    # 用常數時間比較，避免時序側通道
     return bool(ADMIN_PASS) and hmac.compare_digest(str(pw_input), str(ADMIN_PASS))
-    
-# === 是否有 st.dialog（舊版 Streamlit 沒有）===
+
 try:
     HAVE_DIALOG = hasattr(st, "dialog")
 except Exception:
     HAVE_DIALOG = False
 
 def _need_pw(action_key: str, payload: dict | None = None):
-    """要求密碼：把動作與負載存入 session_state，觸發重新渲染去顯示對話框。"""
     st.session_state["pending_action"] = action_key
     st.session_state["pending_payload"] = payload or {}
     st.rerun()
 
-def _show_pw_dialog():
-    """若有待執行動作，就顯示密碼對話框；驗證通過後執行並清理旗標。"""
-    action = st.session_state.get("pending_action")
-    if not action:
-        return
-
-    title = {
-        "delete_rows": "刪除資料需要管理密碼",
-        "archive_clear": "歸檔並清空需要管理密碼",
-        "clear_only": "清空資料需要管理密碼",
-    }.get(action, "需要管理密碼")
-
-    def render_inner():
-        pw = st.text_input("請輸入管理密碼", type="password", key="__admin_pw")
-        c1, c2 = st.columns(2)
-        if c1.button("確認"):
-            if _check_pw(pw):
-                _exec_pending_action()
-                st.session_state["pending_action"] = ""
-                st.session_state["pending_payload"] = {}
-                st.success("已完成。")
-                st.rerun()
-            else:
-                st.error("密碼錯誤")
-        if c2.button("取消"):
-            st.session_state["pending_action"] = ""
-            st.session_state["pending_payload"] = {}
-            st.rerun()
-
-    if HAVE_DIALOG:
-        @st.dialog(title)
-        def _dlg():
-            render_inner()
-        _dlg()
-    else:
-        st.warning(title)
-        render_inner()
-
-# 這四欄是判斷「是否為有效資料列」的主鍵欄
-KEY_COLS = ["date","title","category","participant"]
+# 四個主鍵欄
+KEY_COLS = ["date", "title", "category", "participant"]
 
 def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
-    """去前後空白、把 NaN 變空字串，避免 '張三 ' 被誤判成不同"""
     out = df.copy()
     for c in df.columns:
         out[c] = out[c].astype(str).fillna("").str.strip()
     return out
 
 def _is_blank_row(row) -> bool:
-    """四個主鍵欄位全空，視為『空列』"""
     return all((str(row.get(c, "")).strip() == "") for c in KEY_COLS)
 
 def _count_deleted_rows(before_df: pd.DataFrame, after_df: pd.DataFrame) -> int:
-    """用 idempotency_key 判斷刪除；若沒有就用四欄組合鍵。更穩。"""
     def keyset(df: pd.DataFrame) -> set[str]:
         if "idempotency_key" in df.columns and df["idempotency_key"].astype(str).str.len().gt(0).any():
             return set(df["idempotency_key"].astype(str))
         combo = (
-            df["date"].astype(str) + "|" +
-            df["title"].astype(str) + "|" +
-            df["category"].astype(str) + "|" +
-            df["participant"].astype(str)
+            df["date"].astype(str)
+            + "|"
+            + df["title"].astype(str)
+            + "|"
+            + df["category"].astype(str)
+            + "|"
+            + df["participant"].astype(str)
         )
         return set(combo)
+
     return len(keyset(before_df) - keyset(after_df))
 
-# ---------- 新增：穩定寫入（append + 退避重試） ----------
+# ---------- 新增：穩定 append ----------
 def safe_append(ws, rows: list[list], *, value_input_option: str = "RAW") -> bool:
-    """追加行，針對 429/5xx 自動退避重試。"""
     if not rows:
         return True
     for i in range(5):
@@ -332,12 +277,14 @@ sh = open_spreadsheet_by_fixed_id()
 def normalize_names(s: str):
     if not s:
         return []
-    raw = (s.replace("、", ",")
-             .replace(" ", " ")  # 全形空白
-             .replace("，", ",")
-             .replace("（", "(")
-             .replace("）", ")")
-             .replace(" ", ","))
+    raw = (
+        s.replace("、", ",")
+        .replace(" ", " ")
+        .replace("，", ",")
+        .replace("（", "(")
+        .replace("）", ")")
+        .replace(" ", ",")
+    )
     out = []
     for token in raw.split(","):
         token = token.strip()
@@ -354,27 +301,34 @@ def aggregate(df, points_map, rewards):
     df = df.copy()
     df["points"] = df["category"].map(points_map).fillna(0).astype(int)
     summary = (
-        df.pivot_table(index="participant", columns="category",
-                       values="points", aggfunc="count", fill_value=0)
-          .sort_index()
+        df.pivot_table(
+            index="participant",
+            columns="category",
+            values="points",
+            aggfunc="count",
+            fill_value=0,
+        ).sort_index()
     )
     summary["總點數"] = 0
     for cat, pt in points_map.items():
         if cat in summary.columns:
             summary["總點數"] += summary[cat] * pt
-    thresholds = sorted([int(r["threshold"]) for r in rewards if str(r.get("threshold","")).strip()!=""])
+    thresholds = sorted(
+        [int(r["threshold"]) for r in rewards if str(r.get("threshold", "")).strip() != ""]
+    )
+
     def reward_badge(x):
         gain = [t for t in thresholds if x >= t]
-        return (max(gain) if gain else 0)
+        return max(gain) if gain else 0
+
     summary["已達門檻"] = summary["總點數"].apply(reward_badge)
-    return summary.reset_index().sort_values(["總點數","participant"], ascending=[False,True])
+    return summary.reset_index().sort_values(["總點數", "participant"], ascending=[False, True])
 
 def make_code(title: str, category: str, iso_date: str, length: int = 8) -> str:
     base = f"{iso_date}|{category}|{title}".encode("utf-8")
     h = hashlib.md5(base).hexdigest()
     return h[:length].upper()
 
-# ---------- 新增：冪等鍵（避免重複寫入） ----------
 def make_idempotency_key(name: str, title: str, category: str, iso_date: str) -> str:
     raw = f"{iso_date}|{title}|{category}|{name}".strip()
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16].upper()
@@ -382,74 +336,87 @@ def make_idempotency_key(name: str, title: str, category: str, iso_date: str) ->
 def upsert_link(links_df: pd.DataFrame, code: str, title: str, category: str, iso_date: str) -> pd.DataFrame:
     links_df = links_df.copy()
     if "code" not in links_df.columns:
-        links_df = pd.DataFrame(columns=["code","title","category","date"])
+        links_df = pd.DataFrame(columns=["code", "title", "category", "date"])
     mask = links_df["code"] == code
     row = {"code": code, "title": title, "category": category, "date": iso_date}
     if mask.any():
-        links_df.loc[mask, ["title","category","date"]] = [title, category, iso_date]
+        links_df.loc[mask, ["title", "category", "date"]] = [title, category, iso_date]
     else:
         links_df = pd.concat([links_df, pd.DataFrame([row])], ignore_index=True)
     return links_df
 
 # ================== Sheet-backed Storage API ==================
+EVENT_COLS = ["date", "title", "category", "participant", "idempotency_key"]
+
 def load_config_from_sheet(sh):
-    ws_items = get_or_create_ws(sh, "scoring_items", ["category","points"])
-    ws_rewards = get_or_create_ws(sh, "rewards", ["threshold","reward"])
-    items_df = ws_to_df(ws_items, ["category","points"])
-    rewards_df = ws_to_df(ws_rewards, ["threshold","reward"])
+    ws_items = get_or_create_ws(sh, "scoring_items", ["category", "points"])
+    ws_rewards = get_or_create_ws(sh, "rewards", ["threshold", "reward"])
+    items_df = ws_to_df(ws_items, ["category", "points"])
+    rewards_df = ws_to_df(ws_rewards, ["threshold", "reward"])
     return {
         "scoring_items": items_df.to_dict(orient="records"),
         "rewards": rewards_df.to_dict(orient="records"),
     }
 
 def save_config_to_sheet(sh, cfg):
-    ws_items = get_or_create_ws(sh, "scoring_items", ["category","points"])
-    ws_rewards = get_or_create_ws(sh, "rewards", ["threshold","reward"])
-    items = pd.DataFrame(cfg.get("scoring_items", [])) if cfg.get("scoring_items") else pd.DataFrame(columns=["category","points"])
-    rewards = pd.DataFrame(cfg.get("rewards", [])) if cfg.get("rewards") else pd.DataFrame(columns=["threshold","reward"])
+    ws_items = get_or_create_ws(sh, "scoring_items", ["category", "points"])
+    ws_rewards = get_or_create_ws(sh, "rewards", ["threshold", "reward"])
+    items = (
+        pd.DataFrame(cfg.get("scoring_items", []))
+        if cfg.get("scoring_items")
+        else pd.DataFrame(columns=["category", "points"])
+    )
+    rewards = (
+        pd.DataFrame(cfg.get("rewards", []))
+        if cfg.get("rewards")
+        else pd.DataFrame(columns=["threshold", "reward"])
+    )
     if "points" in items.columns:
-        items["points"] = pd.to_numeric(items["points"], errors="coerce").fillna(0).astype(int)
+        items["points"] = (
+            pd.to_numeric(items["points"], errors="coerce").fillna(0).astype(int)
+        )
     if "threshold" in rewards.columns:
-        rewards["threshold"] = pd.to_numeric(rewards["threshold"], errors="coerce").fillna(0).astype(int)
-    df_to_ws(ws_items, items, ["category","points"])
-    df_to_ws(ws_rewards, rewards, ["threshold","reward"])
-
-# 事件記錄：我們讓表頭包含 idempotency_key
-EVENT_COLS = ["date","title","category","participant","idempotency_key"]
+        rewards["threshold"] = (
+            pd.to_numeric(rewards["threshold"], errors="coerce").fillna(0).astype(int)
+        )
+    df_to_ws(ws_items, items, ["category", "points"])
+    df_to_ws(ws_rewards, rewards, ["threshold", "reward"])
 
 def load_events_from_sheet(sh) -> pd.DataFrame:
     ws = get_or_create_ws(sh, "events", EVENT_COLS)
     df = ws_to_df(ws, EVENT_COLS)
-    # 🆕 去前後空白，避免隱藏空格造成「同一個人卻算兩筆」
     for c in df.columns:
         df[c] = df[c].astype(str).fillna("").str.strip()
     return df
 
-def save_events_to_sheet(sh, df: pd.DataFrame, *, allow_clear: bool=False):
-    """僅在需要覆蓋/清空時才用；平時報到用 append 安全寫入。"""
+def save_events_to_sheet(sh, df: pd.DataFrame, *, allow_clear: bool = False):
     ws = get_or_create_ws(sh, "events", EVENT_COLS)
     safe_write_ws(ws, df, EVENT_COLS, allow_clear=allow_clear)
 
 def load_links_from_sheet(sh) -> pd.DataFrame:
-    ws = get_or_create_ws(sh, "links", ["code","title","category","date"])
-    return ws_to_df(ws, ["code","title","category","date"])
+    ws = get_or_create_ws(sh, "links", ["code", "title", "category", "date"])
+    return ws_to_df(ws, ["code", "title", "category", "date"])
 
 def save_links_to_sheet(sh, df: pd.DataFrame):
-    ws = get_or_create_ws(sh, "links", ["code","title","category","date"])
-    df_to_ws(ws, df, ["code","title","category","date"])
+    ws = get_or_create_ws(sh, "links", ["code", "title", "category", "date"])
+    df_to_ws(ws, df, ["code", "title", "category", "date"])
 
-# ---------- 新增：event_keys 索引（更快去重） ----------
+# ---------- event_keys（去重用） ----------
 def load_event_keys_ws(sh):
-    return get_or_create_ws(sh, "event_keys", ["idempotency_key","date","title","category","participant"])
+    return get_or_create_ws(
+        sh, "event_keys", ["idempotency_key", "date", "title", "category", "participant"]
+    )
 
-@st.cache_data(ttl=120)
+# 🆕：不快取，每次即時讀取，避免 DUP 誤判
 def load_event_keyset(sh) -> set:
     ws_keys = load_event_keys_ws(sh)
     vals = _with_retry(ws_keys.get_all_values)
     if not vals or len(vals) <= 1:
         return set()
-    # 第一欄為 idempotency_key
     return set([r[0] for r in vals[1:] if r and r[0]])
+
+# ============ 後端 API ============
+AS_URL = st.secrets.get("apps_script", {}).get("web_app_url", "").strip()
 
 def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *, max_retries: int = 5) -> str:
     if not AS_URL:
@@ -481,16 +448,16 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
         except Exception as e:
             last_err = f"EXC {e}"
 
-        time.sleep(min(2**i, 8) + random.random() * 0.3)
+        time.sleep(min(2 ** i, 8) + random.random() * 0.3)
 
     return f"ERR: {last_err or 'unknown'}"
-    
+
 def append_events_rows(sh, rows: list[dict]):
     """統一入口：優先用 API；沒有 API 時退回直接寫表（含冪等鍵與索引維護）"""
     if not rows:
         return {"added": [], "skipped": []}
 
-    # 若選 API 模式
+    # 透過 API
     if WRITE_MODE.startswith("透過後端") and AS_URL:
         added, skipped = [], []
         for r in rows:
@@ -502,11 +469,11 @@ def append_events_rows(sh, rows: list[dict]):
                 skipped.append(p)
             else:
                 st.warning(f"{p} 寫入失敗：{res}")
-        return {"added": added, "skipped": [] if not 'skipped' in locals() else skipped}
+        return {"added": added, "skipped": skipped}
 
-    # ── 否則走「直接寫表」：本地去重 + 兩表附寫 ──
+    # 直接寫 Sheet：先讀 event_keys，確保即時
     ws_events = get_or_create_ws(sh, "events", EVENT_COLS)
-    ws_keys   = load_event_keys_ws(sh)
+    ws_keys = load_event_keys_ws(sh)
     keyset = load_event_keyset(sh)
 
     evt_payload, key_payload = [], []
@@ -515,27 +482,27 @@ def append_events_rows(sh, rows: list[dict]):
         d, t, c, p = r["date"], r["title"], r["category"], r["participant"]
         k = make_idempotency_key(p, t, c, d)
         if k in keyset:
-            skipped.append(p); continue
+            skipped.append(p)
+            continue
         evt_payload.append([d, t, c, p, k])
         key_payload.append([k, d, t, c, p])
-        keyset.add(k); added.append(p)
+        keyset.add(k)
+        added.append(p)
 
     ok1 = safe_append(ws_events, evt_payload, value_input_option="USER_ENTERED") if evt_payload else True
-    ok2 = safe_append(ws_keys,   key_payload, value_input_option="USER_ENTERED") if key_payload else True
-    st.cache_data.clear()
+    ok2 = safe_append(ws_keys, key_payload, value_input_option="USER_ENTERED") if key_payload else True
     if not (ok1 and ok2):
         st.warning("部分寫入失敗，請稍後在『完整記錄』確認。")
     return {"added": added, "skipped": skipped}
 
-# ==== 寫入模式：API 或 直接寫 Sheet（必須放在會呼叫 append_events_rows 之前）====
-AS_URL = st.secrets.get("apps_script", {}).get("web_app_url", "").strip()
+# ==== 寫入模式（Sidebar 會改寫 WRITE_MODE）====
 use_api_default = bool(AS_URL)
 WRITE_MODE = "透過後端 API（推薦）" if use_api_default else "直接寫入 Google Sheet"
 
-# ================= Query Params / Sheet ID bootstrap =================
+# ================= Query Params =================
 qp = st.query_params
 mode = qp.get("mode", "")
-code_param  = qp.get("c", "")
+code_param = qp.get("c", "")
 event_param = qp.get("event", "")
 
 # ============ Public check-in via URL ============
@@ -547,7 +514,7 @@ if mode == "checkin":
         st.stop()
 
     events_df = load_events_from_sheet(sh)
-    links_df  = load_links_from_sheet(sh)
+    links_df = load_links_from_sheet(sh)
 
     title, category, target_date = "未命名活動", "活動護持（含宿訪）", date.today().isoformat()
     resolved = False
@@ -595,8 +562,10 @@ if mode == "checkin":
         if not names:
             st.error("請至少輸入一位姓名。")
         else:
-            to_add = [{"date": target_date, "title": title, "category": category, "participant": n}
-                      for n in names]
+            to_add = [
+                {"date": target_date, "title": title, "category": category, "participant": n}
+                for n in names
+            ]
             result = append_events_rows(sh, to_add) or {"added": [], "skipped": []}
             if result["added"]:
                 st.success(f"已報到 {len(result['added'])} 人：{'、'.join(result['added'])}")
@@ -607,7 +576,6 @@ if mode == "checkin":
 # ================= Admin UI =================
 st.title("🔢護持活動集點(for幹部)")
 
-# Sidebar settings（用 Google Sheet 而不是檔案路徑）
 st.sidebar.title("⚙️ 設定（Google Sheet）")
 st.sidebar.success(f"已綁定試算表：{st.secrets['google_sheets']['sheet_id']}")
 
@@ -618,7 +586,7 @@ WRITE_MODE = st.sidebar.radio(
     help="大量同秒報到時，建議用後端 API（Apps Script）避免撞限額。",
     key="write_mode_radio",
 )
-if not ADMIN_PASS: 
+if not ADMIN_PASS:
     st.sidebar.warning("尚未設定管理密碼（app.admin_password 或環境變數 ADMIN_PASSWORD）。")
 
 def api_healthcheck() -> str:
@@ -647,25 +615,34 @@ config = st.session_state.config
 scoring_items = config.get("scoring_items", [])
 rewards = config.get("rewards", [])
 
-# 轉換 points_map
 points_map = {}
 for i in scoring_items:
     if "category" in i:
         try:
             points_map[i["category"]] = int(i.get("points", 0))
-        except:
+        except Exception:
             points_map[i["category"]] = 0
 
 # Sidebar editors
 with st.sidebar.expander("➕ 編輯集點項目與點數", expanded=False):
     st.caption("新增或調整表格後點『儲存設定』。")
-    items_df = pd.DataFrame(scoring_items) if scoring_items else pd.DataFrame(columns=["category","points"])
-    edited_items = st.data_editor(items_df, num_rows="dynamic", use_container_width=True, key="sb_items_editor")
+    items_df = (
+        pd.DataFrame(scoring_items)
+        if scoring_items
+        else pd.DataFrame(columns=["category", "points"])
+    )
+    edited_items = st.data_editor(
+        items_df, num_rows="dynamic", use_container_width=True, key="sb_items_editor"
+    )
     if st.button("💾 儲存設定（集點項目）", key="sb_save_items_btn"):
         cfg = st.session_state.config
         if not edited_items.empty:
             edited_items["category"] = edited_items["category"].astype(str)
-            edited_items["points"] = pd.to_numeric(edited_items["points"], errors="coerce").fillna(0).astype(int)
+            edited_items["points"] = (
+                pd.to_numeric(edited_items["points"], errors="coerce")
+                .fillna(0)
+                .astype(int)
+            )
             edited_items = edited_items.dropna(subset=["category"])
         cfg["scoring_items"] = edited_items.to_dict(orient="records")
         st.session_state.config = cfg
@@ -673,45 +650,62 @@ with st.sidebar.expander("➕ 編輯集點項目與點數", expanded=False):
         st.success("已儲存集點項目。")
 
 with st.sidebar.expander("🎁 編輯獎勵門檻", expanded=False):
-    rew_df = pd.DataFrame(rewards) if rewards else pd.DataFrame(columns=["threshold","reward"])
-    rew_edit = st.data_editor(rew_df, num_rows="dynamic", use_container_width=True, key="sb_rewards_editor")
+    rew_df = (
+        pd.DataFrame(rewards)
+        if rewards
+        else pd.DataFrame(columns=["threshold", "reward"])
+    )
+    rew_edit = st.data_editor(
+        rew_df, num_rows="dynamic", use_container_width=True, key="sb_rewards_editor"
+    )
     if st.button("💾 儲存設定（獎勵）", key="sb_save_rewards_btn"):
         cfg = st.session_state.config
         if not rew_edit.empty:
             rew_edit["reward"] = rew_edit["reward"].astype(str)
-            rew_edit["threshold"] = pd.to_numeric(rew_edit["threshold"], errors="coerce").fillna(0).astype(int)
-            rew_edit = rew_edit.dropna(subset=["threshold","reward"])
+            rew_edit["threshold"] = (
+                pd.to_numeric(rew_edit["threshold"], errors="coerce")
+                .fillna(0)
+                .astype(int)
+            )
+            rew_edit = rew_edit.dropna(subset=["threshold", "reward"])
         cfg["rewards"] = rew_edit.to_dict(orient="records")
         st.session_state.config = cfg
         save_config_to_sheet(sh, cfg)
         st.success("已儲存獎勵門檻。")
 
-# ============== Tabs (custom order) ==============
-tabs = st.tabs([
-    "🟪 產生 QRcode",
-    "📝 現場報到",
-    "📆 依日期查看參與者",
-    "👤 個人明細",
-    "📒 完整記錄",
-    "🏆 排行榜",
-])
+# ============== Tabs ==============
+tabs = st.tabs(
+    [
+        "🟪 產生 QRcode",
+        "📝 現場報到",
+        "📆 依日期查看參與者",
+        "👤 個人明細",
+        "📒 完整記錄",
+        "🏆 排行榜",
+    ]
+)
 
-# -------- 0) 產生 QRcode（含短代碼） -------
+# -------- 0) 產生 QRcode -------
 with tabs[0]:
     st.subheader("生成報到 QR Code")
 
-    public_base = st.text_input("公開網址（本頁網址）", value="", key="qr_public_url_input").rstrip("/")
+    public_base = st.text_input(
+        "公開網址（本頁網址）", value="", key="qr_public_url_input"
+    ).rstrip("/")
 
-    qr_title    = st.text_input("活動標題", value="迎新晚會", key="qr_title_input")
-    qr_category = st.selectbox("類別", list(points_map.keys()) or ["活動護持（含宿訪）"], key="qr_category_select")
-    qr_date     = st.date_input("活動日期", value=date.today(), key="qr_date_picker")
+    qr_title = st.text_input("活動標題", value="迎新晚會", key="qr_title_input")
+    qr_category = st.selectbox(
+        "類別", list(points_map.keys()) or ["活動護持（含宿訪）"], key="qr_category_select"
+    )
+    qr_date = st.date_input("活動日期", value=date.today(), key="qr_date_picker")
 
     iso = qr_date.isoformat()
     code = make_code(qr_title or qr_category, qr_category, iso, length=8)
 
     links_df = st.session_state.links
-    links_df = upsert_link(links_df, code=code, title=(qr_title or qr_category),
-                           category=qr_category, iso_date=iso)
+    links_df = upsert_link(
+        links_df, code=code, title=(qr_title or qr_category), category=qr_category, iso_date=iso
+    )
     st.session_state.links = links_df
     save_links_to_sheet(sh, links_df)
 
@@ -720,18 +714,24 @@ with tabs[0]:
     if public_base:
         show_safe_link_box(short_url)
         img = qrcode.make(short_url)
-        buf = io.BytesIO(); img.save(buf, format="PNG")
-        st.download_button("⬇️ 下載 QR 圖片",
-                           data=buf.getvalue(),
-                           file_name=f"checkin_{code}.png",
-                           mime="image/png",
-                           key="qr_download_btn")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        st.download_button(
+            "⬇️ 下載 QR 圖片",
+            data=buf.getvalue(),
+            file_name=f"checkin_{code}.png",
+            mime="image/png",
+            key="qr_download_btn",
+        )
     else:
         st.info("請貼上你的 .streamlit.app 根網址（本頁網址）。")
 
     with st.expander("🔎 目前所有短代碼一覽", expanded=False):
-        st.dataframe(links_df.sort_values("date", ascending=False),
-                     use_container_width=True, height=220)
+        st.dataframe(
+            links_df.sort_values("date", ascending=False),
+            use_container_width=True,
+            height=220,
+        )
         st.download_button(
             "⬇️ 下載連結代碼 Excel（匯出）",
             data=df_to_excel_bytes(links_df, "links"),
@@ -747,9 +747,11 @@ with tabs[0]:
 # -------- 1) 現場報到 --------
 with tabs[1]:
     st.subheader("現場快速報到")
-    on_title    = st.text_input("活動標題", value="未命名活動", key="on_title_input")
-    on_category = st.selectbox("類別", list(points_map.keys()) or ["活動護持（含宿訪）"], key="on_category_select")
-    on_date     = st.date_input("日期", value=date.today(), key="on_date_picker")
+    on_title = st.text_input("活動標題", value="未命名活動", key="on_title_input")
+    on_category = st.selectbox(
+        "類別", list(points_map.keys()) or ["活動護持（含宿訪）"], key="on_category_select"
+    )
+    on_date = st.date_input("日期", value=date.today(), key="on_date_picker")
     st.markdown(
         """
         <div style="color:#d32f2f; font-weight:700;">請務必輸入全名（例：陳曉瑩）</div>
@@ -757,16 +759,27 @@ with tabs[1]:
         """,
         unsafe_allow_html=True,
     )
-    names_input = st.text_area("姓名清單", placeholder="例如：陳曉瑩、蕭雅云，張詠禎 徐睿妤",
-                               key="on_names_area", label_visibility="collapsed")
+    names_input = st.text_area(
+        "姓名清單",
+        placeholder="例如：陳曉瑩、蕭雅云，張詠禎 徐睿妤",
+        key="on_names_area",
+        label_visibility="collapsed",
+    )
     if st.button("➕ 加入報到名單", key="on_add_btn"):
         target_date = on_date.isoformat()
         names = normalize_names(names_input)
         if not names:
             st.warning("請至少輸入一位姓名。")
         else:
-            to_add = [{"date": target_date, "title": on_title, "category": on_category, "participant": n}
-                      for n in names]
+            to_add = [
+                {
+                    "date": target_date,
+                    "title": on_title,
+                    "category": on_category,
+                    "participant": n,
+                }
+                for n in names
+            ]
             result = append_events_rows(sh, to_add) or {"added": [], "skipped": []}
             if result["added"]:
                 st.session_state.events = load_events_from_sheet(sh)
@@ -778,7 +791,7 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("📆 依日期查看參與者")
 
-    import calendar, re
+    import calendar
     from datetime import date as _date
 
     color_map = {
@@ -813,20 +826,30 @@ with tabs[2]:
         st.info("目前尚無活動紀錄。")
     else:
         events_df = st.session_state.events.copy()
-        events_df["date_str"] = pd.to_datetime(events_df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-        events_df["date"] = pd.to_datetime(events_df["date"], errors="coerce").dt.date
+        events_df["date_str"] = pd.to_datetime(
+            events_df["date"], errors="coerce"
+        ).dt.strftime("%Y-%m-%d")
+        events_df["date"] = pd.to_datetime(
+            events_df["date"], errors="coerce"
+        ).dt.date
         events_df["cat_norm"] = events_df["category"].map(canon_cat)
 
         today = _date.today()
         coly, colm = st.columns(2)
         with coly:
-            year = st.number_input("年份", min_value=2020, max_value=2035, value=today.year, step=1)
+            year = st.number_input(
+                "年份", min_value=2020, max_value=2035, value=today.year, step=1
+            )
         with colm:
-            month = st.number_input("月份", min_value=1, max_value=12, value=today.month, step=1)
+            month = st.number_input(
+                "月份", min_value=1, max_value=12, value=today.month, step=1
+            )
 
         cal = calendar.TextCalendar(firstweekday=calendar.SUNDAY)
         month_weeks = cal.monthdayscalendar(year, month)
-        weekday_labels = [calendar.day_abbr[(i + cal.getfirstweekday()) % 7] for i in range(7)]
+        weekday_labels = [
+            calendar.day_abbr[(i + cal.getfirstweekday()) % 7] for i in range(7)
+        ]
 
         c1, c2 = st.columns([3, 1])
         with c1:
@@ -853,13 +876,18 @@ with tabs[2]:
                                 f"style='width:{dots_size}px;height:{dots_size}px;"
                                 f"border-radius:50%;background:{col};display:inline-block;margin:1px;'></div>"
                             )
-                        html += f"<td style='padding:4px;border:1px solid #333;'>{day}<br>{dots}</td>"
+                        html += (
+                            f"<td style='padding:4px;border:1px solid #333;'>{day}<br>{dots}</td>"
+                        )
                 html += "</tr>"
             html += "</table>"
             st.markdown(html, unsafe_allow_html=True)
 
         with c2:
-            st.markdown("<div style='font-size:16px; font-weight:600;'>📌 類別</div>", unsafe_allow_html=True)
+            st.markdown(
+                "<div style='font-size:16px; font-weight:600;'>📌 類別</div>",
+                unsafe_allow_html=True,
+            )
             legend_html = ""
             for cat, col in color_map.items():
                 legend_html += (
@@ -871,24 +899,38 @@ with tabs[2]:
 
         sel_date = st.date_input("選擇日期", value=today, key="bydate_date_picker")
         sel_date_str = sel_date.isoformat()
-        day_df = events_df[events_df["date_str"] == sel_date_str][["date_str","title","category","participant"]]
+        day_df = events_df[events_df["date_str"] == sel_date_str][
+            ["date_str", "title", "category", "participant"]
+        ]
 
         if day_df.empty:
             st.info(f"{sel_date_str} 沒有任何紀錄。")
         else:
             cat_options = sorted(day_df["category"].astype(str).unique())
-            sel_cats = st.multiselect("篩選類別（可多選）", options=cat_options, default=cat_options, key="bydate_cats_multiselect")
+            sel_cats = st.multiselect(
+                "篩選類別（可多選）",
+                options=cat_options,
+                default=cat_options,
+                key="bydate_cats_multiselect",
+            )
             show_df = day_df[day_df["category"].isin(sel_cats)].copy()
 
             names = sorted(show_df["participant"].astype(str).unique())
             st.write(f"**共 {len(names)} 人**：", "、".join(names) if names else "（無）")
-            st.dataframe(show_df[["participant","title","category"]].sort_values(["category","participant"]),
-                         use_container_width=True, height=300)
-            st.download_button("⬇️ 下載當日明細 Excel（匯出）",
-                               data=df_to_excel_bytes(show_df, "events"),
-                               file_name=f"events_{sel_date_str}.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               key="bydate_download_btn")
+            st.dataframe(
+                show_df[["participant", "title", "category"]].sort_values(
+                    ["category", "participant"]
+                ),
+                use_container_width=True,
+                height=300,
+            )
+            st.download_button(
+                "⬇️ 下載當日明細 Excel（匯出）",
+                data=df_to_excel_bytes(show_df, "events"),
+                file_name=f"events_{sel_date_str}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="bydate_download_btn",
+            )
 
 # -------- 3) 個人明細 --------
 with tabs[3]:
@@ -898,17 +940,32 @@ with tabs[3]:
     else:
         c1, c2 = st.columns(2)
         with c1:
-            participants = sorted(st.session_state.events["participant"].astype(str).fillna("").unique().tolist())
+            participants = (
+                st.session_state.events["participant"]
+                .astype(str)
+                .fillna("")
+                .unique()
+                .tolist()
+            )
+            participants = sorted([p for p in participants if p])
             person = st.selectbox("選擇參加者", participants, key="detail_person_select")
         with c2:
-            only_cat = st.multiselect("篩選類別（可多選）",
-                                      options=sorted(st.session_state.events["category"].unique()),
-                                      default=None, key="detail_cats_multiselect")
-        dfp = st.session_state.events.query("participant == @person")[["date","title","category","participant"]].copy()
+            only_cat = st.multiselect(
+                "篩選類別（可多選）",
+                options=sorted(st.session_state.events["category"].unique()),
+                default=None,
+                key="detail_cats_multiselect",
+            )
+        dfp = st.session_state.events.query(
+            "participant == @person"
+        )[["date", "title", "category", "participant"]].copy()
         if only_cat:
             dfp = dfp[dfp["category"].isin(only_cat)]
-        st.dataframe(dfp[["date","title","category"]].sort_values("date"),
-                     use_container_width=True, height=350)
+        st.dataframe(
+            dfp[["date", "title", "category"]].sort_values("date"),
+            use_container_width=True,
+            height=350,
+        )
         st.download_button(
             "⬇️ 下載此人明細 Excel（匯出）",
             data=df_to_excel_bytes(dfp, "records"),
@@ -917,39 +974,80 @@ with tabs[3]:
             key="detail_download_btn",
         )
 
-# -------- 4) 完整記錄 --------
+# -------- 4) 完整記錄（可編輯 + 🆕排序） --------
 with tabs[4]:
     st.subheader("完整記錄（可編輯）")
     st.caption("欄位：date, title, category, participant, idempotency_key（請勿修改 id 欄）")
 
+    # 🆕 排序選項
+    sort_option = st.selectbox(
+        "排序方式（只影響畫面顯示）",
+        [
+            "日期：新 → 舊",
+            "日期：舊 → 新",
+            "姓名：A → Z",
+            "姓名：Z → A",
+            "類別：A → Z",
+            "類別：Z → A",
+        ],
+        key="full_sort_option",
+    )
+
+    # 原始快照（不排序，用來算刪除筆數）
     original_df = _normalize_df(st.session_state.events)
 
+    # 依使用者選擇建立「檢視用」DataFrame
+    view_df = st.session_state.events.copy()
+    if sort_option == "日期：新 → 舊":
+        view_df = view_df.sort_values("date", ascending=False)
+    elif sort_option == "日期：舊 → 新":
+        view_df = view_df.sort_values("date", ascending=True)
+    elif sort_option == "姓名：A → Z":
+        view_df = view_df.sort_values("participant", ascending=True)
+    elif sort_option == "姓名：Z → A":
+        view_df = view_df.sort_values("participant", ascending=False)
+    elif sort_option == "類別：A → Z":
+        view_df = view_df.sort_values("category", ascending=True)
+    elif sort_option == "類別：Z → A":
+        view_df = view_df.sort_values("category", ascending=False)
+
     edited = st.data_editor(
-        st.session_state.events,
+        view_df,
         num_rows="dynamic",
         use_container_width=True,
         key="full_editor_table",
         column_config={
-            "idempotency_key": st.column_config.TextColumn("idempotency_key", disabled=True),
+            "idempotency_key": st.column_config.TextColumn(
+                "idempotency_key", disabled=True
+            ),
         },
     )
 
     edited_norm = _normalize_df(edited)
-    edited_nonblank = edited_norm[~edited_norm.apply(_is_blank_row, axis=1)].reset_index(drop=True)
+    edited_nonblank = edited_norm[
+        ~edited_norm.apply(_is_blank_row, axis=1)
+    ].reset_index(drop=True)
 
     def _keyset(df: pd.DataFrame) -> set[str]:
-        if "idempotency_key" in df.columns and df["idempotency_key"].astype(str).str.len().gt(0).any():
+        if "idempotency_key" in df.columns and df["idempotency_key"].astype(
+            str
+        ).str.len().gt(0).any():
             return set(df["idempotency_key"].astype(str))
         combo = (
-            df["date"].astype(str) + "|" +
-            df["title"].astype(str) + "|" +
-            df["category"].astype(str) + "|" +
-            df["participant"].astype(str)
+            df["date"].astype(str)
+            + "|"
+            + df["title"].astype(str)
+            + "|"
+            + df["category"].astype(str)
+            + "|"
+            + df["participant"].astype(str)
         )
         return set(combo)
 
     deleted_count = len(_keyset(original_df) - _keyset(edited_nonblank))
-    st.info(f"本次變更偵測到：刪除 {deleted_count} 筆（若為 0 代表只有新增/修改，還需要按下保存變更，才可輸入密碼）。")
+    st.info(
+        f"本次變更偵測到：刪除 {deleted_count} 筆（若為 0 代表只有新增/修改，還需要按下保存變更，才可輸入密碼）。"
+    )
 
     if st.button("💾 保存變更", key="full_save_btn"):
         _need_pw("delete_rows", {"edited_df": edited_nonblank})
@@ -978,7 +1076,7 @@ with tabs[4]:
 # -------- 5) 排行榜 --------
 with tabs[5]:
     st.subheader("排行榜（依總點數）")
-    ev4 = st.session_state.events[["date","title","category","participant"]].copy()
+    ev4 = st.session_state.events[["date", "title", "category", "participant"]].copy()
     summary = aggregate(ev4, points_map, rewards)
     st.dataframe(summary, use_container_width=True, height=520)
 
@@ -1006,7 +1104,7 @@ with tabs[5]:
                 df_to_ws(ws_snap, summary, list(summary.columns))
                 st.success(f"已建立快照：{snap_title}")
 
-# === 密碼動作實作（放在最後，會用到上面定義的函式） ===
+# === 密碼對話框 + 實際動作 ===
 def _exec_pending_action():
     """依 pending_action 執行實際工作。"""
     action = st.session_state.get("pending_action")
@@ -1014,6 +1112,7 @@ def _exec_pending_action():
 
     if action == "delete_rows":
         edited = payload["edited_df"]
+        # 直接覆蓋 events sheet（allow_clear=True），確保刪除真的生效
         save_events_to_sheet(sh, edited, allow_clear=True)
         st.session_state.events = load_events_from_sheet(sh)
 
@@ -1030,6 +1129,43 @@ def _exec_pending_action():
         empty_df = st.session_state.events.iloc[0:0]
         save_events_to_sheet(sh, empty_df, allow_clear=True)
         st.session_state.events = load_events_from_sheet(sh)
+
+def _show_pw_dialog():
+    action = st.session_state.get("pending_action")
+    if not action:
+        return
+
+    title = {
+        "delete_rows": "刪除資料需要管理密碼",
+        "archive_clear": "歸檔並清空需要管理密碼",
+        "clear_only": "清空資料需要管理密碼",
+    }.get(action, "需要管理密碼")
+
+    def render_inner():
+        pw = st.text_input("請輸入管理密碼", type="password", key="__admin_pw")
+        c1, c2 = st.columns(2)
+        if c1.button("確認"):
+            if _check_pw(pw):
+                _exec_pending_action()
+                st.session_state["pending_action"] = ""
+                st.session_state["pending_payload"] = {}
+                st.success("已完成。")
+                st.rerun()
+            else:
+                st.error("密碼錯誤")
+        if c2.button("取消"):
+            st.session_state["pending_action"] = ""
+            st.session_state["pending_payload"] = {}
+            st.rerun()
+
+    if HAVE_DIALOG:
+        @st.dialog(title)
+        def _dlg():
+            render_inner()
+        _dlg()
+    else:
+        st.warning(title)
+        render_inner()
 
 # 若有待執行動作，顯示密碼對話框
 _show_pw_dialog()
