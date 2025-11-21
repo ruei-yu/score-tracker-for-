@@ -228,11 +228,11 @@ def _need_pw(action_key: str, payload: dict | None = None):
 # 四個主鍵欄
 KEY_COLS = ["date", "title", "category", "participant"]
 
-# 🔧 這裡有改：把 'None' / 'nan' / 'NaN' 當成空白
+# 🔧 正規化：把 'None' / 'nan' / 'NaN' 當成空白
 def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     for c in df.columns:
-        s = out[c].astype(str)          # NaN -> 'nan', None -> 'None'
+        s = out[c].astype(str)
         s = s.replace({"None": "", "nan": "", "NaN": ""})
         out[c] = s.str.strip()
     return out
@@ -257,7 +257,7 @@ def _count_deleted_rows(before_df: pd.DataFrame, after_df: pd.DataFrame) -> int:
 
     return len(keyset(before_df) - keyset(after_df))
 
-# ---------- 新增：穩定 append ----------
+# ---------- 穩定 append ----------
 def safe_append(ws, rows: list[list], *, value_input_option: str = "RAW") -> bool:
     if not rows:
         return True
@@ -350,6 +350,8 @@ def upsert_link(links_df: pd.DataFrame, code: str, title: str, category: str, is
 
 # ================== Sheet-backed Storage API ==================
 EVENT_COLS = ["date", "title", "category", "participant", "idempotency_key"]
+# 🔄 已刪除紀錄：多一個 deleted_at 欄位
+EVENT_DELETED_COLS = EVENT_COLS + ["deleted_at"]
 
 def load_config_from_sheet(sh):
     ws_items = get_or_create_ws(sh, "scoring_items", ["category", "points"])
@@ -385,7 +387,6 @@ def save_config_to_sheet(sh, cfg):
     df_to_ws(ws_items, items, ["category", "points"])
     df_to_ws(ws_rewards, rewards, ["threshold", "reward"])
 
-# 🔧 改這裡：讀取 events 就套用 _normalize_df
 def load_events_from_sheet(sh) -> pd.DataFrame:
     ws = get_or_create_ws(sh, "events", EVENT_COLS)
     df = ws_to_df(ws, EVENT_COLS)
@@ -402,6 +403,28 @@ def load_links_from_sheet(sh) -> pd.DataFrame:
 def save_links_to_sheet(sh, df: pd.DataFrame):
     ws = get_or_create_ws(sh, "links", ["code", "title", "category", "date"])
     df_to_ws(ws, df, ["code", "title", "category", "date"])
+
+# 🗑 已刪除紀錄（讀取）
+def load_deleted_from_sheet(sh) -> pd.DataFrame:
+    ws = get_or_create_ws(sh, "events_deleted", EVENT_DELETED_COLS)
+    df = ws_to_df(ws, EVENT_DELETED_COLS)
+    return _normalize_df(df)
+
+# 🗑 已刪除紀錄（追加寫入）
+def append_deleted_rows(sh, deleted_df: pd.DataFrame):
+    if deleted_df is None or deleted_df.empty:
+        return
+    ws_del = get_or_create_ws(sh, "events_deleted", EVENT_DELETED_COLS)
+    df = deleted_df.copy()
+    # 補上 deleted_at 欄位
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    if "deleted_at" not in df.columns:
+        df["deleted_at"] = now_iso
+    else:
+        df["deleted_at"] = df["deleted_at"].replace("", now_iso)
+    df = df[EVENT_DELETED_COLS]
+    rows = df.astype(str).values.tolist()
+    safe_append(ws_del, rows, value_input_option="USER_ENTERED")
 
 # ---------- event_keys（去重用） ----------
 def load_event_keys_ws(sh):
@@ -513,7 +536,7 @@ if mode == "checkin":
 
     if not sh:
         st.error("找不到 Google Sheet。")
-    st.stop()
+        st.stop()
 
     events_df = load_events_from_sheet(sh)
     links_df = load_links_from_sheet(sh)
@@ -684,6 +707,7 @@ tabs = st.tabs(
         "👤 個人明細",
         "📒 完整記錄",
         "🏆 排行榜",
+        "🗑 已刪除紀錄",
     ]
 )
 
@@ -1037,8 +1061,32 @@ with tabs[4]:
         )
         return set(combo)
 
-    deleted_count = len(_keyset(original_df) - _keyset(edited_nonblank))
-    st.info(f"本次變更偵測到：刪除 {deleted_count} 筆（若為 0 代表只有新增/修改，按保存變更才會寫回）。")
+    # 找出這次「會被刪掉」的列（只用來顯示／之後保存時也會備份到 events_deleted）
+    deleted_keys = _keyset(original_df) - _keyset(edited_nonblank)
+    if "idempotency_key" in original_df.columns and original_df["idempotency_key"].astype(str).str.len().gt(0).any():
+        deleted_preview = original_df[original_df["idempotency_key"].astype(str).isin(deleted_keys)]
+    else:
+        combo_orig = (
+            original_df["date"].astype(str) + "|" +
+            original_df["title"].astype(str) + "|" +
+            original_df["category"].astype(str) + "|" +
+            original_df["participant"].astype(str)
+        )
+        deleted_preview = original_df[combo_orig.isin(deleted_keys)]
+
+    deleted_count = len(deleted_preview)
+    st.info(f"本次變更偵測到：刪除 {deleted_count} 筆（按『保存變更』才會寫回，也會備份到『已刪除紀錄』）。")
+
+    if deleted_count > 0:
+        with st.expander("🔍 即將刪除的紀錄預覽", expanded=False):
+            st.dataframe(
+                deleted_preview[["date", "title", "category", "participant"]],
+                use_container_width=True,
+                height=260,
+            )
+
+    # 把這次的刪除預覽存起來，待會按下保存、輸入密碼後實際寫入 deleted sheet
+    st.session_state["deleted_preview_df"] = deleted_preview
 
     if st.button("💾 保存變更", key="full_save_btn"):
         _need_pw("delete_rows", {"edited_df": edited_nonblank})
@@ -1093,6 +1141,40 @@ with tabs[5]:
                 df_to_ws(ws_snap, summary, list(summary.columns))
                 st.success(f"已建立快照：{snap_title}")
 
+# -------- 6) 已刪除紀錄 --------
+with tabs[6]:
+    st.subheader("🗑 已刪除紀錄（備份區，不再計入點數）")
+
+    try:
+        deleted_df = load_deleted_from_sheet(sh)
+    except Exception as e:
+        st.error(f"讀取已刪除紀錄失敗：{e}")
+        deleted_df = pd.DataFrame(columns=EVENT_DELETED_COLS)
+
+    if deleted_df.empty:
+        st.info("目前沒有已刪除紀錄。")
+    else:
+        # 盡量依 deleted_at 新→舊 排序
+        if "deleted_at" in deleted_df.columns:
+            deleted_df["deleted_at_sort"] = pd.to_datetime(
+                deleted_df["deleted_at"], errors="coerce"
+            )
+            deleted_df = deleted_df.sort_values(
+                ["deleted_at_sort", "date"], ascending=[False, False]
+            ).drop(columns=["deleted_at_sort"])
+        st.dataframe(
+            deleted_df[["deleted_at", "date", "title", "category", "participant"]],
+            use_container_width=True,
+            height=520,
+        )
+        st.download_button(
+            "⬇️ 下載已刪除紀錄 Excel（備份）",
+            data=df_to_excel_bytes(deleted_df, "events_deleted"),
+            file_name="events_deleted.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="deleted_download_btn",
+        )
+
 # === 密碼對話框 + 實際動作 ===
 def _exec_pending_action():
     """依 pending_action 執行實際工作。"""
@@ -1101,8 +1183,42 @@ def _exec_pending_action():
 
     if action == "delete_rows":
         edited = payload["edited_df"]
-        # 直接覆蓋 events sheet（allow_clear=True），確保刪除真的生效
-        save_events_to_sheet(sh, edited, allow_clear=True)
+
+        # 1) 讀取當前 events（舊資料，用來算真正刪掉哪些）
+        before_df = load_events_from_sheet(sh)
+
+        # 2) 算出真正被刪掉的列，並備份到 events_deleted
+        def _keyset_inner(df: pd.DataFrame) -> set[str]:
+            if "idempotency_key" in df.columns and df["idempotency_key"].astype(str).str.len().gt(0).any():
+                return set(df["idempotency_key"].astype(str))
+            combo = (
+                df["date"].astype(str) + "|" +
+                df["title"].astype(str) + "|" +
+                df["category"].astype(str) + "|" +
+                df["participant"].astype(str)
+            )
+            return set(combo)
+
+        before_norm = _normalize_df(before_df)
+        edited_norm = _normalize_df(edited)
+
+        deleted_keys = _keyset_inner(before_norm) - _keyset_inner(edited_norm)
+        if "idempotency_key" in before_norm.columns and before_norm["idempotency_key"].astype(str).str.len().gt(0).any():
+            deleted_rows = before_norm[before_norm["idempotency_key"].astype(str).isin(deleted_keys)]
+        else:
+            combo_before = (
+                before_norm["date"].astype(str) + "|" +
+                before_norm["title"].astype(str) + "|" +
+                before_norm["category"].astype(str) + "|" +
+                before_norm["participant"].astype(str)
+            )
+            deleted_rows = before_norm[combo_before.isin(deleted_keys)]
+
+        if not deleted_rows.empty:
+            append_deleted_rows(sh, deleted_rows)
+
+        # 3) 寫回新的 events
+        save_events_to_sheet(sh, edited_norm, allow_clear=True)
         st.session_state.events = load_events_from_sheet(sh)
 
     elif action == "archive_clear":
