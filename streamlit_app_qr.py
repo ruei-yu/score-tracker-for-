@@ -1006,8 +1006,71 @@ with tabs[4]:
     st.caption("欄位：date, title, category, participant, idempotency_key（請勿修改 id 欄）")
 
     # 先把資料 normalize，一次處理 'None' / 'nan'
-    base_df = _normalize_df(st.session_state.events)
-    original_df = base_df.copy()
+base_df = _normalize_df(st.session_state.events)
+
+# ==========================================================
+# 防呆：確保 events 永遠具有完整欄位
+# 避免 Google Sheet 表頭異常或 session_state 資料結構異常
+# 導致 sort_values("date") 出現 KeyError
+# ==========================================================
+for c in EVENT_COLS:
+    if c not in base_df.columns:
+        base_df[c] = ""
+
+# 固定欄位順序
+base_df = base_df[EVENT_COLS].copy()
+
+# 把四個主鍵都空的幽靈列直接去掉
+base_df = base_df[
+    ~base_df.apply(_is_blank_row, axis=1)
+].reset_index(drop=True)
+
+# 清理後的資料才作為「原始資料」
+original_df = base_df.copy()
+
+# 🔽 排序方式（只影響畫面）
+sort_mode = st.selectbox(
+    "排序方式（只影響畫面）",
+    [
+        "依日期：新 → 舊",
+        "依日期：舊 → 新",
+        "姓名：A → Z",
+        "姓名：Z → A",
+    ],
+    key="full_sort_mode",
+)
+
+df = base_df.copy()
+
+# date 排序前再做一次保險
+df["date"] = df["date"].astype(str).str.strip()
+
+if sort_mode == "依日期：新 → 舊":
+    df = df.sort_values(
+        "date",
+        ascending=False,
+        na_position="last"
+    )
+elif sort_mode == "依日期：舊 → 新":
+    df = df.sort_values(
+        "date",
+        ascending=True,
+        na_position="last"
+    )
+elif sort_mode == "姓名：A → Z":
+    df = df.sort_values(
+        "participant",
+        ascending=True,
+        na_position="last"
+    )
+elif sort_mode == "姓名：Z → A":
+    df = df.sort_values(
+        "participant",
+        ascending=False,
+        na_position="last"
+    )
+
+df = df.reset_index(drop=True)
 
     # 把四個主鍵都空的幽靈列（以前刪成 None 的）直接去掉
     base_df = base_df[~base_df.apply(_is_blank_row, axis=1)].reset_index(drop=True)
