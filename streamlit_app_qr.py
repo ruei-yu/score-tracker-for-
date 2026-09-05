@@ -1005,173 +1005,212 @@ with tabs[4]:
     st.subheader("完整記錄（可編輯）")
     st.caption("欄位：date, title, category, participant, idempotency_key（請勿修改 id 欄）")
 
-    # 先把資料 normalize，一次處理 'None' / 'nan'
-base_df = _normalize_df(st.session_state.events)
+    # 正規化資料
+    base_df = _normalize_df(st.session_state.events)
 
-# ==========================================================
-# 防呆：確保 events 永遠具有完整欄位
-# 避免 Google Sheet 表頭異常或 session_state 資料結構異常
-# 導致 sort_values("date") 出現 KeyError
-# ==========================================================
-for c in EVENT_COLS:
-    if c not in base_df.columns:
-        base_df[c] = ""
+    # 確保 events 永遠具有完整欄位
+    for c in EVENT_COLS:
+        if c not in base_df.columns:
+            base_df[c] = ""
 
-# 固定欄位順序
-base_df = base_df[EVENT_COLS].copy()
+    # 固定欄位順序
+    base_df = base_df[EVENT_COLS].copy()
 
-# 把四個主鍵都空的幽靈列直接去掉
-base_df = base_df[
-    ~base_df.apply(_is_blank_row, axis=1)
-].reset_index(drop=True)
+    # 移除四個主鍵都空白的幽靈列
+    base_df = base_df[
+        ~base_df.apply(_is_blank_row, axis=1)
+    ].reset_index(drop=True)
 
-# 清理後的資料才作為「原始資料」
-original_df = base_df.copy()
+    # 清理後的資料才作為原始資料
+    original_df = base_df.copy()
 
-# 🔽 排序方式（只影響畫面）
-sort_mode = st.selectbox(
-    "排序方式（只影響畫面）",
-    [
-        "依日期：新 → 舊",
-        "依日期：舊 → 新",
-        "姓名：A → Z",
-        "姓名：Z → A",
-    ],
-    key="full_sort_mode",
-)
-
-df = base_df.copy()
-
-# date 排序前再做一次保險
-df["date"] = df["date"].astype(str).str.strip()
-
-if sort_mode == "依日期：新 → 舊":
-    df = df.sort_values(
-        "date",
-        ascending=False,
-        na_position="last"
-    )
-elif sort_mode == "依日期：舊 → 新":
-    df = df.sort_values(
-        "date",
-        ascending=True,
-        na_position="last"
-    )
-elif sort_mode == "姓名：A → Z":
-    df = df.sort_values(
-        "participant",
-        ascending=True,
-        na_position="last"
-    )
-elif sort_mode == "姓名：Z → A":
-    df = df.sort_values(
-        "participant",
-        ascending=False,
-        na_position="last"
+    # 排序方式
+    sort_mode = st.selectbox(
+        "排序方式（只影響畫面）",
+        [
+            "依日期：新 → 舊",
+            "依日期：舊 → 新",
+            "姓名：A → Z",
+            "姓名：Z → A",
+        ],
+        key="full_sort_mode",
     )
 
-df = df.reset_index(drop=True)
+    df = base_df.copy()
 
-# 把四個主鍵都空的幽靈列（以前刪成 None 的）直接去掉
-base_df = base_df[~base_df.apply(_is_blank_row, axis=1)].reset_index(drop=True)
+    # date 排序前保險處理
+    df["date"] = df["date"].astype(str).str.strip()
 
-# 🔽 排序方式（只影響畫面）
-sort_mode = st.selectbox(
-    "排序方式（只影響畫面）",
-    [
-        "依日期：新 → 舊",
-        "依日期：舊 → 新",
-        "姓名：A → Z",
-        "姓名：Z → A",
-    ],
-    key="full_sort_mode",
-)
+    if sort_mode == "依日期：新 → 舊":
+        df = df.sort_values(
+            "date",
+            ascending=False,
+            na_position="last",
+        )
+    elif sort_mode == "依日期：舊 → 新":
+        df = df.sort_values(
+            "date",
+            ascending=True,
+            na_position="last",
+        )
+    elif sort_mode == "姓名：A → Z":
+        df = df.sort_values(
+            "participant",
+            ascending=True,
+            na_position="last",
+        )
+    elif sort_mode == "姓名：Z → A":
+        df = df.sort_values(
+            "participant",
+            ascending=False,
+            na_position="last",
+        )
 
-df = base_df.copy()
-if sort_mode == "依日期：新 → 舊":
-    df = df.sort_values("date", ascending=False, na_position="last")
-elif sort_mode == "依日期：舊 → 新":
-    df = df.sort_values("date", ascending=True, na_position="last")
-elif sort_mode == "姓名：A → Z":
-    df = df.sort_values("participant", ascending=True, na_position="last")
-elif sort_mode == "姓名：Z → A":
-    df = df.sort_values("participant", ascending=False, na_position="last")
+    df = df.reset_index(drop=True)
 
-df = df.reset_index(drop=True)
-
-# -------- 顯示可編輯表格 --------
-edited = st.data_editor(
-    df,
-    num_rows="dynamic",
-    use_container_width=True,
-    key="full_editor_table",
-    column_config={
-        "idempotency_key": st.column_config.TextColumn("idempotency_key", disabled=True),
-    },
-)
+    # -------- 顯示可編輯表格 --------
+    edited = st.data_editor(
+        df,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="full_editor_table",
+        column_config={
+            "idempotency_key": st.column_config.TextColumn(
+                "idempotency_key",
+                disabled=True,
+            ),
+        },
+    )
 
     edited_norm = _normalize_df(edited)
-    edited_nonblank = edited_norm[~edited_norm.apply(_is_blank_row, axis=1)].reset_index(drop=True)
+
+    edited_nonblank = edited_norm[
+        ~edited_norm.apply(_is_blank_row, axis=1)
+    ].reset_index(drop=True)
 
     def _keyset(df: pd.DataFrame) -> set[str]:
-        if "idempotency_key" in df.columns and df["idempotency_key"].astype(str).str.len().gt(0).any():
+        if (
+            "idempotency_key" in df.columns
+            and df["idempotency_key"]
+            .astype(str)
+            .str.len()
+            .gt(0)
+            .any()
+        ):
             return set(df["idempotency_key"].astype(str))
-            combo = (
-                df["date"].astype(str) + "|" +
-                df["title"].astype(str) + "|" +
-                df["category"].astype(str) + "|" +
-                df["participant"].astype(str)
-            )
+
+        combo = (
+            df["date"].astype(str)
+            + "|"
+            + df["title"].astype(str)
+            + "|"
+            + df["category"].astype(str)
+            + "|"
+            + df["participant"].astype(str)
+        )
         return set(combo)
 
-    # 找出這次「會被刪掉」的列（只用來顯示／之後保存時也會備份到 events_deleted）
+    # 找出這次會被刪掉的紀錄
     deleted_keys = _keyset(original_df) - _keyset(edited_nonblank)
-    if "idempotency_key" in original_df.columns and original_df["idempotency_key"].astype(str).str.len().gt(0).any():
-        deleted_preview = original_df[original_df["idempotency_key"].astype(str).isin(deleted_keys)]
+
+    if (
+        "idempotency_key" in original_df.columns
+        and original_df["idempotency_key"]
+        .astype(str)
+        .str.len()
+        .gt(0)
+        .any()
+    ):
+        deleted_preview = original_df[
+            original_df["idempotency_key"]
+            .astype(str)
+            .isin(deleted_keys)
+        ]
     else:
         combo_orig = (
-            original_df["date"].astype(str) + "|" +
-            original_df["title"].astype(str) + "|" +
-            original_df["category"].astype(str) + "|" +
-            original_df["participant"].astype(str)
+            original_df["date"].astype(str)
+            + "|"
+            + original_df["title"].astype(str)
+            + "|"
+            + original_df["category"].astype(str)
+            + "|"
+            + original_df["participant"].astype(str)
         )
-        deleted_preview = original_df[combo_orig.isin(deleted_keys)]
+        deleted_preview = original_df[
+            combo_orig.isin(deleted_keys)
+        ]
 
     deleted_count = len(deleted_preview)
-    st.info(f"本次變更偵測到：刪除 {deleted_count} 筆（按『保存變更』才會寫回，也會備份到『已刪除紀錄』）。")
+
+    st.info(
+        f"本次變更偵測到：刪除 {deleted_count} 筆"
+        "（按『保存變更』才會寫回，也會備份到『已刪除紀錄』）。"
+    )
 
     if deleted_count > 0:
-        with st.expander("🔍 即將刪除的紀錄預覽", expanded=False):
+        with st.expander(
+            "🔍 即將刪除的紀錄預覽",
+            expanded=False,
+        ):
             st.dataframe(
-                deleted_preview[["date", "title", "category", "participant"]],
+                deleted_preview[
+                    ["date", "title", "category", "participant"]
+                ],
                 use_container_width=True,
                 height=260,
             )
 
-    # 把這次的刪除預覽存起來，待會按下保存、輸入密碼後實際寫入 deleted sheet
+    # 儲存刪除預覽
     st.session_state["deleted_preview_df"] = deleted_preview
 
     if st.button("💾 保存變更", key="full_save_btn"):
-        _need_pw("delete_rows", {"edited_df": edited_nonblank})
+        _need_pw(
+            "delete_rows",
+            {"edited_df": edited_nonblank},
+        )
 
     c1, c2, c3 = st.columns(3)
+
     with c1:
         st.download_button(
             "⬇️ 下載 Excel（匯出）",
-            data=df_to_excel_bytes(st.session_state.events, "events"),
+            data=df_to_excel_bytes(
+                st.session_state.events,
+                "events",
+            ),
             file_name="events_export.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="full_download_btn",
         )
+
     with c2:
-        st.markdown("**🗄️ 歸檔並清空（建立新工作表備份）**")
-        if st.button("執行歸檔並清空", key="full_archive_btn"):
-            backup_title = f"events_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            _need_pw("archive_clear", {"backup_title": backup_title})
+        st.markdown(
+            "**🗄️ 歸檔並清空（建立新工作表備份）**"
+        )
+
+        if st.button(
+            "執行歸檔並清空",
+            key="full_archive_btn",
+        ):
+            backup_title = (
+                f"events_backup_"
+                f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            )
+            _need_pw(
+                "archive_clear",
+                {"backup_title": backup_title},
+            )
+
     with c3:
         st.markdown("**♻️ 只清空（不備份）**")
-        if st.button("執行只清空", key="full_clear_btn"):
+
+        if st.button(
+            "執行只清空",
+            key="full_clear_btn",
+        ):
             _need_pw("clear_only", {})
+
+# -------- 5) 排行榜 --------
 
 # -------- 5) 排行榜 --------
 with tabs[5]:
