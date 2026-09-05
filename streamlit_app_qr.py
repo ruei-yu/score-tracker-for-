@@ -1106,54 +1106,54 @@ with tabs[4]:
     ].reset_index(drop=True)
 
     def _keyset(df: pd.DataFrame) -> set[str]:
-    # 防止空 DataFrame / 欄位遺失造成 KeyError
-    if df is None:
-        return set()
-
-    df = df.copy()
-
-    # 不論 Streamlit 回傳什麼，都強制補齊欄位
-    df = df.reindex(columns=EVENT_COLS, fill_value="")
-
-    if df.empty:
-        return set()
-
-    # 正規化
-    for c in EVENT_COLS:
-        df[c] = (
-            df[c]
-            .astype(str)
-            .replace({
-                "None": "",
-                "nan": "",
-                "NaN": "",
-            })
-            .str.strip()
+        # 防止空 DataFrame / 欄位遺失造成 KeyError
+        if df is None:
+            return set()
+    
+        df = df.copy()
+    
+        # 不論 Streamlit 回傳什麼，都強制補齊欄位
+        df = df.reindex(columns=EVENT_COLS, fill_value="")
+    
+        if df.empty:
+            return set()
+    
+        # 正規化
+        for c in EVENT_COLS:
+            df[c] = (
+                df[c]
+                .astype(str)
+                .replace({
+                    "None": "",
+                    "nan": "",
+                    "NaN": "",
+                })
+                .str.strip()
+            )
+    
+        # 每一列優先使用 idempotency_key
+        combo = (
+            df["date"]
+            + "|"
+            + df["title"]
+            + "|"
+            + df["category"]
+            + "|"
+            + df["participant"]
         )
-
-    # 每一列優先使用 idempotency_key
-    combo = (
-        df["date"]
-        + "|"
-        + df["title"]
-        + "|"
-        + df["category"]
-        + "|"
-        + df["participant"]
-    )
-
-    keys = df["idempotency_key"].where(
-        df["idempotency_key"] != "",
-        combo,
-    )
-
-    # 四個主要欄位全部空白的列不要算
-    valid = df[KEY_COLS].ne("").any(axis=1)
-
-    return set(keys[valid].tolist())
-
-    # 找出這次會被刪掉的紀錄
-    deleted_keys = _keyset(original_df) - _keyset(edited_nonblank)
+    
+        keys = df["idempotency_key"].where(
+            df["idempotency_key"] != "",
+            combo,
+        )
+    
+        # 四個主要欄位全部空白的列不要算
+        valid = df[KEY_COLS].ne("").any(axis=1)
+    
+        return set(keys[valid].tolist())
+    
+        # 找出這次會被刪掉的紀錄
+        deleted_keys = _keyset(original_df) - _keyset(edited_nonblank)
 
     if (
         "idempotency_key" in original_df.columns
