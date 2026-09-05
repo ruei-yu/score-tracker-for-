@@ -1152,8 +1152,8 @@ with tabs[4]:
     
         return set(keys[valid].tolist())
     
-            # 找出這次會被刪掉的紀錄
-            deleted_keys = _keyset(original_df) - _keyset(edited_nonblank)
+    # 找出這次會被刪掉的紀錄
+    deleted_keys = _keyset(original_df) - _keyset(edited_nonblank)
     
             if (
                 "idempotency_key" in original_df.columns
