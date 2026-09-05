@@ -1153,34 +1153,46 @@ with tabs[4]:
         return set(keys[valid].tolist())
     
     # 找出這次會被刪掉的紀錄
-    deleted_keys = _keyset(original_df) - _keyset(edited_nonblank)
-    
-    if (
-        "idempotency_key" in original_df.columns
-        and original_df["idempotency_key"]
-        .astype(str)
-        .str.len()
-        .gt(0)
-        .any()
-    ):
-        deleted_preview = original_df[
-            original_df["idempotency_key"]
-            .astype(str)
-            .isin(deleted_keys)
-        ]
+        # 找出這次會被刪掉的紀錄
+    # 先強制確保兩邊都有完整五個欄位
+    original_safe = (
+        original_df.copy()
+        if original_df is not None
+        else pd.DataFrame()
+    ).reindex(columns=EVENT_COLS, fill_value="")
+
+    edited_safe = (
+        edited_nonblank.copy()
+        if edited_nonblank is not None
+        else pd.DataFrame()
+    ).reindex(columns=EVENT_COLS, fill_value="")
+
+    deleted_keys = _keyset(original_safe) - _keyset(edited_safe)
+
+    # 空表或沒有任何刪除，直接回傳空的 deleted_preview
+    if original_safe.empty or not deleted_keys:
+        deleted_preview = original_safe.iloc[0:0].copy()
+
     else:
+        # 每一列產生與 _keyset 相同的 key
         combo_orig = (
-            original_df["date"].astype(str)
+            original_safe["date"].astype(str)
             + "|"
-            + original_df["title"].astype(str)
+            + original_safe["title"].astype(str)
             + "|"
-            + original_df["category"].astype(str)
+            + original_safe["category"].astype(str)
             + "|"
-            + original_df["participant"].astype(str)
+            + original_safe["participant"].astype(str)
         )
-        deleted_preview = original_df[
-            combo_orig.isin(deleted_keys)
-        ]
+
+        row_keys = original_safe["idempotency_key"].astype(str).where(
+            original_safe["idempotency_key"].astype(str).str.strip() != "",
+            combo_orig,
+        )
+
+        deleted_preview = original_safe[
+            row_keys.isin(deleted_keys)
+        ].copy()
 
     deleted_count = len(deleted_preview)
 
@@ -1355,7 +1367,10 @@ def _exec_pending_action():
 
         # 3) 寫回新的 events
         save_events_to_sheet(sh, edited_norm, allow_clear=True)
-        st.session_state.events = load_events_from_sheet(sh)
+        st.session_state.events = load_events_from_sheet(sh).reindex(
+            columns=EVENT_COLS,
+            fill_value=""
+        )
 
     elif action == "archive_clear":
         backup_title = payload["backup_title"]
