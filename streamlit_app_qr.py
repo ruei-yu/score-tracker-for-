@@ -1044,10 +1044,6 @@ with tabs[4]:
         key="full_sort_mode",
     )
 
-    df = base_df.copy()
-
-    # date 排序前保險處理
-    df["date"] = df["date"].astype(str).str.strip()
 
     df = base_df.copy()
 
