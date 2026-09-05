@@ -1072,43 +1072,43 @@ elif sort_mode == "姓名：Z → A":
 
 df = df.reset_index(drop=True)
 
-    # 把四個主鍵都空的幽靈列（以前刪成 None 的）直接去掉
-    base_df = base_df[~base_df.apply(_is_blank_row, axis=1)].reset_index(drop=True)
+# 把四個主鍵都空的幽靈列（以前刪成 None 的）直接去掉
+base_df = base_df[~base_df.apply(_is_blank_row, axis=1)].reset_index(drop=True)
 
-    # 🔽 排序方式（只影響畫面）
-    sort_mode = st.selectbox(
-        "排序方式（只影響畫面）",
-        [
-            "依日期：新 → 舊",
-            "依日期：舊 → 新",
-            "姓名：A → Z",
-            "姓名：Z → A",
-        ],
-        key="full_sort_mode",
-    )
+# 🔽 排序方式（只影響畫面）
+sort_mode = st.selectbox(
+    "排序方式（只影響畫面）",
+    [
+        "依日期：新 → 舊",
+        "依日期：舊 → 新",
+        "姓名：A → Z",
+        "姓名：Z → A",
+    ],
+    key="full_sort_mode",
+)
 
-    df = base_df.copy()
-    if sort_mode == "依日期：新 → 舊":
-        df = df.sort_values("date", ascending=False, na_position="last")
-    elif sort_mode == "依日期：舊 → 新":
-        df = df.sort_values("date", ascending=True, na_position="last")
-    elif sort_mode == "姓名：A → Z":
-        df = df.sort_values("participant", ascending=True, na_position="last")
-    elif sort_mode == "姓名：Z → A":
-        df = df.sort_values("participant", ascending=False, na_position="last")
+df = base_df.copy()
+if sort_mode == "依日期：新 → 舊":
+    df = df.sort_values("date", ascending=False, na_position="last")
+elif sort_mode == "依日期：舊 → 新":
+    df = df.sort_values("date", ascending=True, na_position="last")
+elif sort_mode == "姓名：A → Z":
+    df = df.sort_values("participant", ascending=True, na_position="last")
+elif sort_mode == "姓名：Z → A":
+    df = df.sort_values("participant", ascending=False, na_position="last")
 
-    df = df.reset_index(drop=True)
+df = df.reset_index(drop=True)
 
-    # -------- 顯示可編輯表格 --------
-    edited = st.data_editor(
-        df,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="full_editor_table",
-        column_config={
-            "idempotency_key": st.column_config.TextColumn("idempotency_key", disabled=True),
-        },
-    )
+# -------- 顯示可編輯表格 --------
+edited = st.data_editor(
+    df,
+    num_rows="dynamic",
+    use_container_width=True,
+    key="full_editor_table",
+    column_config={
+        "idempotency_key": st.column_config.TextColumn("idempotency_key", disabled=True),
+    },
+)
 
     edited_norm = _normalize_df(edited)
     edited_nonblank = edited_norm[~edited_norm.apply(_is_blank_row, axis=1)].reset_index(drop=True)
@@ -1116,12 +1116,12 @@ df = df.reset_index(drop=True)
     def _keyset(df: pd.DataFrame) -> set[str]:
         if "idempotency_key" in df.columns and df["idempotency_key"].astype(str).str.len().gt(0).any():
             return set(df["idempotency_key"].astype(str))
-        combo = (
-            df["date"].astype(str) + "|" +
-            df["title"].astype(str) + "|" +
-            df["category"].astype(str) + "|" +
-            df["participant"].astype(str)
-        )
+            combo = (
+                df["date"].astype(str) + "|" +
+                df["title"].astype(str) + "|" +
+                df["category"].astype(str) + "|" +
+                df["participant"].astype(str)
+            )
         return set(combo)
 
     # 找出這次「會被刪掉」的列（只用來顯示／之後保存時也會備份到 events_deleted）
