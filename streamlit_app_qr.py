@@ -1155,102 +1155,102 @@ with tabs[4]:
     # 找出這次會被刪掉的紀錄
     deleted_keys = _keyset(original_df) - _keyset(edited_nonblank)
     
-            if (
-                "idempotency_key" in original_df.columns
-                and original_df["idempotency_key"]
+        if (
+            "idempotency_key" in original_df.columns
+            and original_df["idempotency_key"]
+            .astype(str)
+            .str.len()
+            .gt(0)
+            .any()
+        ):
+            deleted_preview = original_df[
+                original_df["idempotency_key"]
                 .astype(str)
-                .str.len()
-                .gt(0)
-                .any()
-            ):
-                deleted_preview = original_df[
-                    original_df["idempotency_key"]
-                    .astype(str)
-                    .isin(deleted_keys)
-                ]
-            else:
-                combo_orig = (
-                    original_df["date"].astype(str)
-                    + "|"
-                    + original_df["title"].astype(str)
-                    + "|"
-                    + original_df["category"].astype(str)
-                    + "|"
-                    + original_df["participant"].astype(str)
-                )
-                deleted_preview = original_df[
-                    combo_orig.isin(deleted_keys)
-                ]
-        
-            deleted_count = len(deleted_preview)
-        
-            st.info(
-                f"本次變更偵測到：刪除 {deleted_count} 筆"
-                "（按『保存變更』才會寫回，也會備份到『已刪除紀錄』）。"
+                .isin(deleted_keys)
+            ]
+        else:
+            combo_orig = (
+                original_df["date"].astype(str)
+                + "|"
+                + original_df["title"].astype(str)
+                + "|"
+                + original_df["category"].astype(str)
+                + "|"
+                + original_df["participant"].astype(str)
             )
-        
-            if deleted_count > 0:
-                with st.expander(
-                    "🔍 即將刪除的紀錄預覽",
-                    expanded=False,
-                ):
-                    st.dataframe(
-                        deleted_preview[
-                            ["date", "title", "category", "participant"]
-                        ],
-                        use_container_width=True,
-                        height=260,
-                    )
-        
-            # 儲存刪除預覽
-            st.session_state["deleted_preview_df"] = deleted_preview
-        
-            if st.button("💾 保存變更", key="full_save_btn"):
+            deleted_preview = original_df[
+                combo_orig.isin(deleted_keys)
+            ]
+    
+        deleted_count = len(deleted_preview)
+    
+        st.info(
+            f"本次變更偵測到：刪除 {deleted_count} 筆"
+            "（按『保存變更』才會寫回，也會備份到『已刪除紀錄』）。"
+        )
+    
+        if deleted_count > 0:
+            with st.expander(
+                "🔍 即將刪除的紀錄預覽",
+                expanded=False,
+            ):
+                st.dataframe(
+                    deleted_preview[
+                        ["date", "title", "category", "participant"]
+                    ],
+                    use_container_width=True,
+                    height=260,
+                )
+    
+        # 儲存刪除預覽
+        st.session_state["deleted_preview_df"] = deleted_preview
+    
+        if st.button("💾 保存變更", key="full_save_btn"):
+            _need_pw(
+                "delete_rows",
+                {"edited_df": edited_nonblank},
+            )
+    
+        c1, c2, c3 = st.columns(3)
+    
+        with c1:
+            st.download_button(
+                "⬇️ 下載 Excel（匯出）",
+                data=df_to_excel_bytes(
+                    st.session_state.events,
+                    "events",
+                ),
+                file_name="events_export.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="full_download_btn",
+            )
+    
+        with c2:
+            st.markdown(
+                "**🗄️ 歸檔並清空（建立新工作表備份）**"
+            )
+    
+            if st.button(
+                "執行歸檔並清空",
+                key="full_archive_btn",
+            ):
+                backup_title = (
+                    f"events_backup_"
+                    f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                )
                 _need_pw(
-                    "delete_rows",
-                    {"edited_df": edited_nonblank},
+                    "archive_clear",
+                    {"backup_title": backup_title},
                 )
-        
-            c1, c2, c3 = st.columns(3)
-        
-            with c1:
-                st.download_button(
-                    "⬇️ 下載 Excel（匯出）",
-                    data=df_to_excel_bytes(
-                        st.session_state.events,
-                        "events",
-                    ),
-                    file_name="events_export.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="full_download_btn",
-                )
-        
-            with c2:
-                st.markdown(
-                    "**🗄️ 歸檔並清空（建立新工作表備份）**"
-                )
-        
-                if st.button(
-                    "執行歸檔並清空",
-                    key="full_archive_btn",
-                ):
-                    backup_title = (
-                        f"events_backup_"
-                        f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                    )
-                    _need_pw(
-                        "archive_clear",
-                        {"backup_title": backup_title},
-                    )
-        
-            with c3:
-                st.markdown("**♻️ 只清空（不備份）**")
-        
-                if st.button(
-                    "執行只清空",
-                    key="full_clear_btn",
-                ):
-                    _need_pw("clear_only", {})
+    
+        with c3:
+            st.markdown("**♻️ 只清空（不備份）**")
+    
+            if st.button(
+                "執行只清空",
+                key="full_clear_btn",
+            ):
+                _need_pw("clear_only", {})
 
 # -------- 5) 排行榜 --------
 
