@@ -390,6 +390,14 @@ def save_config_to_sheet(sh, cfg):
 def load_events_from_sheet(sh) -> pd.DataFrame:
     ws = get_or_create_ws(sh, "events", EVENT_COLS)
     df = ws_to_df(ws, EVENT_COLS)
+
+    # 防呆：即使 events 被清空，也一定保留完整欄位
+    for c in EVENT_COLS:
+        if c not in df.columns:
+            df[c] = ""
+
+    df = df[EVENT_COLS].copy()
+
     return _normalize_df(df)
 
 def save_events_to_sheet(sh, df: pd.DataFrame, *, allow_clear: bool = False):
