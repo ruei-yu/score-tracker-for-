@@ -1049,6 +1049,19 @@ with tabs[4]:
     # date 排序前保險處理
     df["date"] = df["date"].astype(str).str.strip()
 
+    df = base_df.copy()
+
+    # 🔒 最後一道防呆：不管 Google Sheet / session_state 怎麼樣，
+    # 這裡都強制確保五個欄位一定存在
+    for c in EVENT_COLS:
+        if c not in df.columns:
+            df[c] = ""
+
+    df = df.reindex(columns=EVENT_COLS, fill_value="").copy()
+
+    # date 排序前保險處理
+    df["date"] = df["date"].astype(str).str.strip()
+
     if sort_mode == "依日期：新 → 舊":
         df = df.sort_values(
             "date",
