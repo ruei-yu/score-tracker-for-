@@ -278,25 +278,59 @@ sh = open_spreadsheet_by_fixed_id()
 
 # ================= Domain Helpers =================
 def normalize_names(s: str):
+    """
+    支援：
+    陳曉瑩、劉宜儒*2、徐睿妤＊3、黃佳宜×2
+    """
+
     if not s:
         return []
+
     raw = (
         s.replace("、", ",")
         .replace(" ", " ")
         .replace("，", ",")
         .replace("（", "(")
         .replace("）", ")")
+        .replace("＊", "*")
+        .replace("×", "*")
+        .replace("\n", ",")
         .replace(" ", ",")
     )
+
     out = []
+
     for token in raw.split(","):
         token = token.strip()
+
         if not token:
             continue
+
+        # 去掉括號備註
         if "(" in token and ")" in token:
             token = token.split("(")[0].strip()
-        out.append(token)
-    return [n for n in out if n]
+
+        # 支援 姓名*2、姓名＊2、姓名×2
+        m = re.match(r"^(.*?)(?:\*(\d+))?$", token)
+
+        if not m:
+            continue
+
+        name = m.group(1).strip()
+        count = int(m.group(2)) if m.group(2) else 1
+
+        if not name:
+            continue
+
+        # 最多一次登記 20 次，避免手誤
+        count = max(1, min(count, 20))
+
+        out.append({
+            "name": name,
+            "count": count,
+        })
+
+    return out
 
 def aggregate(df, points_map, rewards):
     if df.empty:
@@ -332,8 +366,14 @@ def make_code(title: str, category: str, iso_date: str, length: int = 8) -> str:
     h = hashlib.md5(base).hexdigest()
     return h[:length].upper()
 
-def make_idempotency_key(name: str, title: str, category: str, iso_date: str) -> str:
-    raw = f"{iso_date}|{title}|{category}|{name}".strip()
+def make_idempotency_key(
+    name: str,
+    title: str,
+    category: str,
+    iso_date: str,
+    occurrence: int = 1,
+) -> str:
+    raw = f"{iso_date}|{title}|{category}|{name}|{occurrence}".strip()
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16].upper()
 
 def upsert_link(links_df: pd.DataFrame, code: str, title: str, category: str, iso_date: str) -> pd.DataFrame:
@@ -451,7 +491,15 @@ def load_event_keyset(sh) -> set:
 # ============ 後端 API ============
 AS_URL = st.secrets.get("apps_script", {}).get("web_app_url", "").strip()
 
-def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *, max_retries: int = 5) -> str:
+def send_checkin_via_api(
+    date_str: str,
+    title: str,
+    category: str,
+    name: str,
+    occurrence: int = 1,
+    *,
+    max_retries: int = 5
+) -> str:
     if not AS_URL:
         return "ERR: NO_URL"
 
@@ -460,7 +508,13 @@ def send_checkin_via_api(date_str: str, title: str, category: str, name: str, *,
         "title": title,
         "category": category,
         "participant": name,
-        "idempotency_key": make_idempotency_key(name, title, category, date_str),
+        "idempotency_key": make_idempotency_key(
+            name,
+            title,
+            category,
+            date_str,
+            occurrence,
+        ),
     }
 
     last_err = ""
@@ -494,8 +548,19 @@ def append_events_rows(sh, rows: list[dict]):
     if WRITE_MODE.startswith("透過後端") and AS_URL:
         added, skipped = [], []
         for r in rows:
-            d, t, c, p = r["date"], r["title"], r["category"], r["participant"]
-            res = send_checkin_via_api(d, t, c, p)
+            d = r["date"]
+            t = r["title"]
+            c = r["category"]
+            p = r["participant"]
+            occurrence = int(r.get("occurrence", 1))
+        
+            res = send_checkin_via_api(
+                d,
+                t,
+                c,
+                p,
+                occurrence,
+            )
             if res == "OK":
                 added.append(p)
             elif res == "DUP":
@@ -512,8 +577,19 @@ def append_events_rows(sh, rows: list[dict]):
     evt_payload, key_payload = [], []
     added, skipped = [], []
     for r in rows:
-        d, t, c, p = r["date"], r["title"], r["category"], r["participant"]
-        k = make_idempotency_key(p, t, c, d)
+        d = r["date"]
+        t = r["title"]
+        c = r["category"]
+        p = r["participant"]
+        occurrence = int(r.get("occurrence", 1))
+    
+        k = make_idempotency_key(
+            p,
+            t,
+            c,
+            d,
+            occurrence,
+        )
         if k in keyset:
             skipped.append(p)
             continue
@@ -591,14 +667,40 @@ if mode == "checkin":
     )
 
     if st.button("送出報到", key="pub_submit_btn"):
-        names = normalize_names(names_input)
-        if not names:
+        name_items = normalize_names(names_input)
+
+        if not name_items:
             st.error("請至少輸入一位姓名。")
         else:
-            to_add = [
-                {"date": target_date, "title": title, "category": category, "participant": n}
-                for n in names
-            ]
+            to_add = []
+        
+            for item in name_items:
+                name = item["name"]
+                count = item["count"]
+        
+                for occurrence in range(1, count + 1):
+                    to_add.append({
+                        "date": target_date,
+                        "title": title,
+                        "category": category,
+                        "participant": name,
+                        "occurrence": occurrence,
+                    })
+        
+            result = append_events_rows(sh, to_add) or {
+                "added": [],
+                "skipped": [],
+            }
+        
+            if result["added"]:
+                st.success(
+                    f"已新增 {len(result['added'])} 筆集點紀錄。"
+                )
+        
+            if result["skipped"]:
+                st.warning(
+                    f"有 {len(result['skipped'])} 筆先前已登記，已自動跳過。"
+                )
             result = append_events_rows(sh, to_add) or {"added": [], "skipped": []}
             if result["added"]:
                 st.success(f"已報到 {len(result['added'])} 人：{'、'.join(result['added'])}")
@@ -801,19 +903,42 @@ with tabs[1]:
     )
     if st.button("➕ 加入報到名單", key="on_add_btn"):
         target_date = on_date.isoformat()
-        names = normalize_names(names_input)
-        if not names:
+        name_items = normalize_names(names_input)
+
+        if not name_items:
             st.warning("請至少輸入一位姓名。")
         else:
-            to_add = [
-                {
-                    "date": target_date,
-                    "title": on_title,
-                    "category": on_category,
-                    "participant": n,
-                }
-                for n in names
-            ]
+            to_add = []
+        
+            for item in name_items:
+                name = item["name"]
+                count = item["count"]
+        
+                for occurrence in range(1, count + 1):
+                    to_add.append({
+                        "date": target_date,
+                        "title": on_title,
+                        "category": on_category,
+                        "participant": name,
+                        "occurrence": occurrence,
+                    })
+        
+            result = append_events_rows(sh, to_add) or {
+                "added": [],
+                "skipped": [],
+            }
+        
+            if result["added"]:
+                st.session_state.events = load_events_from_sheet(sh)
+        
+                st.success(
+                    f"已新增 {len(result['added'])} 筆集點紀錄。"
+                )
+        
+            if result["skipped"]:
+                st.warning(
+                    f"有 {len(result['skipped'])} 筆先前已登記，已自動跳過。"
+                )
             result = append_events_rows(sh, to_add) or {"added": [], "skipped": []}
             if result["added"]:
                 st.session_state.events = load_events_from_sheet(sh)
